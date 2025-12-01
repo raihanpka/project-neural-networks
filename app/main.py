@@ -16,22 +16,22 @@ def main():
     
     model = NeuralNetwork()
     
-    model.add(Dense(2, 128, learning_rate=0.002, optimizer='adam'))
+    model.add(Dense(2, 128, learning_rate=0.002))
     model.add(BatchNormalization())
     model.add(ReLU())
     model.add(Dropout(0.1))
     
-    model.add(Dense(128, 64, learning_rate=0.002, optimizer='adam'))
+    model.add(Dense(128, 64, learning_rate=0.002))
     model.add(BatchNormalization())
     model.add(ReLU())
     model.add(Dropout(0.1))
     
-    model.add(Dense(64, 32, learning_rate=0.002, optimizer='adam'))
+    model.add(Dense(64, 32, learning_rate=0.002))
     model.add(BatchNormalization())
     model.add(ReLU())
     model.add(Dropout(0.1))
     
-    model.add(Dense(32, 3, learning_rate=0.002, optimizer='adam'))
+    model.add(Dense(32, 3, learning_rate=0.002))
     model.add(Softmax())
     
     model.set_loss(CategoricalCrossentropy(regularization_l2=0.0001))

@@ -1,4 +1,4 @@
-# Neural Networks from Scratch
+# Project Neural Networks
 
 ## Kebutuhan Sistem
 
