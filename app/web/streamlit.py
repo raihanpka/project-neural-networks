@@ -16,7 +16,7 @@ from app.function.regularization import BatchNormalization, Dropout
 from app.function.check_loss import CategoricalCrossentropy, MeanSquaredError, MeanAbsoluteError
 from app.function.metrics import calculate_accuracy
 
-st.set_page_config(page_title="Group 1 - Neural Network (PBL AI)", layout="wide", page_icon="")
+st.set_page_config(page_title="Group 1 - Neural Network (PBL AI)", layout="wide", page_icon="📊")
 
 st.title("Soil Moisture Prediction - Neural Network Manual")
 
