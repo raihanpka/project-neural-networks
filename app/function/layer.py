@@ -47,7 +47,7 @@ class Dense(BaseLayer):
 
     def backward(self, dvalues):
         """
-        Backward pass
+        Backward pass dengan Gradient Descent
         
         Parameters:
         -----------
@@ -59,14 +59,19 @@ class Dense(BaseLayer):
         numpy.ndarray
             Gradien untuk layer sebelumnya
         """
-        # Gradien terhadap weight dan bias
+        # Gradien terhadap weight dan bias (Backpropagation)
         self.dweights = np.dot(self.inputs.T, dvalues)
         self.dbiases = np.sum(dvalues, axis=0, keepdims=True)
+        
+        # Gradient Clipping untuk stabilitas training
+        self.dweights = np.clip(self.dweights, -1.0, 1.0)
+        self.dbiases = np.clip(self.dbiases, -1.0, 1.0)
         
         # Gradien untuk layer sebelumnya
         self.dinputs = np.dot(dvalues, self.weights.T)
         
-        # Update weights dan biases dengan gradient descent
+        # Gradient Descent: θ = θ - α × ∇L/∂θ
+        # Update weights dan biases menggunakan gradient descent
         self.weights -= self.learning_rate * self.dweights
         self.biases -= self.learning_rate * self.dbiases
         

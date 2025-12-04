@@ -12,7 +12,7 @@ from app.function.activations import ReLU, Softmax, Linear
 from app.function.regularization import BatchNormalization, Dropout
 from app.function.check_loss import CategoricalCrossentropy, MeanSquaredError
 from app.function.metrics import calculate_accuracy
-from app.data.generate_dataset import create_data, generate_soil_moisture_dataset
+from app.data.generate_dataset import create_data
 
 # Normalisasi min-max untuk array numpy
 def _minmax_scale_np(arr, minv=None, maxv=None):
@@ -93,11 +93,15 @@ def train_and_eval_model(X, Y, is_regression=False, n_classes=5, epochs=100, bat
         return model, mae, None
 
 
-def main(dataset_path='app/data/soil_moisture_level.csv', use_timeseries=False, generate=False, n_locations=5, period_days=365, seq_length=15, n_classes=5, epochs=100, batch_size=64, lr=0.005, regression=False):
+def main(dataset_path='app/data/soil_moisture_level.csv', use_timeseries=False, generate=False, seq_length=15, n_classes=5, epochs=100, batch_size=64, lr=0.005, regression=False):
     print('Starting pipeline...')
     if generate:
-        print('Generating synthetic time series dataset...')
-        df = generate_soil_moisture_dataset(n_rows=period_days, seed=42, save_csv=True, path=dataset_path, add_time=True, n_locations=n_locations, period_days=period_days)
+        print('Generating synthetic dataset...')
+        X, Y = create_data(samples=1000)
+        is_reg = regression
+        model, metric, _ = train_and_eval_model(X, Y, is_reg, n_classes=n_classes, epochs=epochs, batch_size=batch_size, lr=lr)
+        print('Done. Metric:', metric)
+        return
     elif os.path.exists(dataset_path):
         df = pd.read_csv(dataset_path)
     else:
@@ -154,8 +158,6 @@ if __name__ == '__main__':
     parser.add_argument('--learning_rate', type=float, default=0.005)
     parser.add_argument('--regression', action='store_true')
     parser.add_argument('--generate', action='store_true')
-    parser.add_argument('--n_locations', type=int, default=5)
-    parser.add_argument('--period_days', type=int, default=365)
     args = parser.parse_args()
 
-    main(dataset_path=args.dataset, use_timeseries=True, generate=args.generate, n_locations=args.n_locations, period_days=args.period_days, seq_length=args.seq_length, n_classes=args.n_classes, epochs=args.epochs, batch_size=args.batch_size, lr=args.learning_rate, regression=args.regression)
+    main(dataset_path=args.dataset, use_timeseries=True, generate=args.generate, seq_length=args.seq_length, n_classes=args.n_classes, epochs=args.epochs, batch_size=args.batch_size, lr=args.learning_rate, regression=args.regression)

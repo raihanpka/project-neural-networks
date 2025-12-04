@@ -2,72 +2,44 @@ import numpy as np
 import pandas as pd
 import matplotlib.pyplot as plt
 
-def generate_soil_moisture_dataset(n_rows=1000, seed: int = 0, save_csv: bool = False,
-                                   path: str = 'app/data/soil_moisture_synthetic.csv', plot: bool = False,
-                                   use_space_headers: bool = False,
-                                   add_time: bool = False,
-                                   n_locations: int = 1,
-                                   start_date: str = '2024-01-01',
-                                   period_days: int = 365,
-                                   freq: str = 'D'):
-    """Menghasilkan dataset sintetis dengan skema dan hubungan berikut:
 
-    Kolom:
-    - temperature: (Celsius)
-    - humidity: (%)
-    - rainfall: (mm)
-    - cloud_cover: (%)
-    - soil_moisture: (%) - target, diturunkan dari variabel lain
+def create_data(samples=100, plot=True, save_csv=False, path='app/data/soil_moisture_synthetic.csv'):
+    """Generate synthetic soil moisture data untuk satu lokasi.
 
-    Contoh baris:
-    temperature humidity rainfall cloud_cover soil_moisture
-    32 40 0 20 12
-    28 60 10 80 35
-
-    Parameter
-    ----------
-    n_rows : int
-        Jumlah baris yang dihasilkan
-    seed : int
-        Seed acak untuk reproduktabilitas
-    save_csv : bool
-        Apakah menulis ke CSV (path)
-    path : str
-        Path keluaran untuk CSV
-    plot : bool
-        Jika True, simpan plot sebar rainfall vs soil_moisture
-
-    Returns
-    -------
-    pandas.DataFrame
-        DataFrame dengan skema yang dihasilkan
+    X: array(N, features=8) [pm1, pm2, pm3, ammonia, luminosity, temperature, humidity, pressure]
+    y: array(N,) soil_moisture (0-100)
     """
-    np.random.seed(seed)
-
+    np.random.seed(0)
+    
     # Suhu: Normal sekitar 25C, dibatasi antara 5 dan 45
-    temperature = np.random.normal(loc=25.0, scale=6.0, size=n_rows)
+    temperature = np.random.normal(loc=25.0, scale=6.0, size=samples)
     temperature = np.clip(temperature, 5.0, 45.0).round(1)
 
     # Kelembaban: Normal sekitar 60%, dibatasi 5-100
-    humidity = np.random.normal(loc=60.0, scale=15.0, size=n_rows)
+    humidity = np.random.normal(loc=60.0, scale=15.0, size=samples)
     humidity = np.clip(humidity, 5.0, 100.0).round(1)
 
-    # Hujan: Sebagian besar nilai kecil dengan kejadian besar sesekali (eksponensial)
-    rainfall = np.random.exponential(scale=3.0, size=n_rows)
-    # Sebagian hari kering (curah hujan = 0)
-    dry_mask = np.random.rand(n_rows) < 0.35
+    # Hujan: Sebagian besar nilai kecil dengan kejadian besar sesekali
+    rainfall = np.random.exponential(scale=3.0, size=samples)
+    dry_mask = np.random.rand(samples) < 0.35
     rainfall[dry_mask] = 0.0
     rainfall = np.round(rainfall, 1)
 
     # Tutup awan: 0-100 uniform
-    cloud_cover = np.random.uniform(0, 100, n_rows).round(1)
+    cloud_cover = np.random.uniform(0, 100, samples).round(1)
 
-    # Buat proxy kelembaban tanah sebagai kombinasi fitur
-    # Normalisasi input ke rentang 0-1, menggunakan nilai min/maks tetap
-    # Suhu berkaitan negatif dengan kelembaban; hujan & kelembaban berkaitan positif
+    # Sensor columns
+    pm1 = np.clip(10 + (100 - humidity) * 0.25 + np.random.normal(0.0, 5.0, samples), 0, None).round(1)
+    pm2 = np.clip(pm1 * (0.9 + np.random.normal(0.0, 0.05, samples)), 0, None).round(1)
+    pm3 = np.clip(pm1 * (0.8 + np.random.normal(0.0, 0.06, samples)), 0, None).round(1)
+    ammonia = np.clip(np.random.normal(0.5, 0.2, samples), 0, None).round(2)
+    luminosity = np.clip((1 - (cloud_cover / 100.0)) * 1000 + np.random.normal(0.0, 50.0, samples), 0, None).round(1)
+    pressure = np.clip(np.random.normal(1013.0, 8.0, samples), 950.0, 1050.0).round(1)
+
+    # Hitung soil moisture
     t_min, t_max = 5.0, 45.0
     h_min, h_max = 5.0, 100.0
-    r_min, r_max = 0.0, np.max(rainfall) if np.max(rainfall) > 0 else 1.0
+    r_min, r_max = 0.0, max(rainfall.max(), 1.0)
     c_min, c_max = 0.0, 100.0
 
     t_norm = (temperature - t_min) / (t_max - t_min)
@@ -75,114 +47,34 @@ def generate_soil_moisture_dataset(n_rows=1000, seed: int = 0, save_csv: bool = 
     r_norm = (rainfall - r_min) / (r_max - r_min) if r_max != r_min else np.zeros_like(rainfall)
     c_norm = (cloud_cover - c_min) / (c_max - c_min)
 
-    # Dasar kelembaban tanah: baseline 10%
     soil_norm = 0.12 + (0.55 * r_norm) + (0.20 * h_norm) - (0.15 * t_norm) + (0.05 * c_norm)
-    # Tambahkan sedikit noise dan batasi antara 0..1
-    soil_norm += np.random.normal(0.0, 0.03, size=n_rows)
+    soil_norm += np.random.normal(0.0, 0.03, size=samples)
     soil_norm = np.clip(soil_norm, 0.0, 1.0)
     soil_moisture = np.round(soil_norm * 100, 1)
 
-    # # Add sensor-style columns to the base tabular generator
-    # pm1 = np.clip(10 + (100 - humidity) * 0.25 + np.random.normal(0.0, 5.0, n_rows), 0, None).round(1)
-    # pm2 = np.clip(pm1 * (0.9 + np.random.normal(0.0, 0.05, n_rows)), 0, None).round(1)
-    # pm3 = np.clip(pm1 * (0.8 + np.random.normal(0.0, 0.06, n_rows)), 0, None).round(1)
-    # ammonia = np.clip(np.random.normal(0.5, 0.2, n_rows), 0, None).round(2)
-    # luminosity = np.clip((1 - (cloud_cover / 100.0)) * 1000 + np.random.normal(0.0, 50.0, n_rows), 0, None).round(1)
-    # pressure = np.clip(np.random.normal(1013.0, 8.0, n_rows), 950.0, 1050.0).round(1)
-
     df = pd.DataFrame({
+        'pm1': pm1,
+        'pm2': pm2,
+        'pm3': pm3,
+        'ammonia': ammonia,
+        'luminosity': luminosity,
+        'pressure': pressure,
         'temperature': temperature,
         'humidity': humidity,
         'rainfall': rainfall,
         'cloud_cover': cloud_cover,
-        # 'pm1': pm1,
-        # 'pm2': pm2,
-        # 'pm3': pm3,
-        # 'ammonia': ammonia,
-        # 'luminosity': luminosity,
-        # 'pressure': pressure,
         'soil_moisture': soil_moisture
     })
-    if use_space_headers:
-        df.columns = ['temperature', 'humidity', 'rainfall', 'cloud cover', 'soil moisture']
-
-    # Jika add_time, buat deret waktu
-    if add_time:
-        # Bangun panjang deret waktu (period_days)
-        rows_per_location = max(1, period_days)
-
-        # Buat rentang waktu
-        date_range = pd.date_range(start=start_date, periods=rows_per_location, freq=freq)
-
-        # Gunakan data dasar untuk rentang yang dibutuhkan
-        temp_ts = np.clip(temperature[:rows_per_location] + np.random.normal(0.0, 2.0, rows_per_location), 5.0, 45.0).round(1)
-        hum_ts = np.clip(humidity[:rows_per_location] + np.random.normal(0.0, 4.0, rows_per_location), 5.0, 100.0).round(1)
-        rain_ts = np.clip(rainfall[:rows_per_location] + np.random.normal(0.0, 1.0, rows_per_location), 0.0, None).round(1)
-        cloud_ts = np.clip(cloud_cover[:rows_per_location] + np.random.normal(0.0, 10.0, rows_per_location), 0.0, 100.0).round(1)
-        
-        # Hitung ulang kelembaban tanah
-        r_max_ts = max(rain_ts.max(), 1.0)
-        r_norm_ts = (rain_ts - r_min) / (r_max_ts - r_min) if r_max_ts != r_min else np.zeros_like(rain_ts)
-        t_norm_ts = (temp_ts - t_min) / (t_max - t_min)
-        h_norm_ts = (hum_ts - h_min) / (h_max - h_min)
-        c_norm_ts = (cloud_ts - c_min) / (c_max - c_min)
-        soil_norm_ts = 0.12 + (0.55 * r_norm_ts) + (0.20 * h_norm_ts) - (0.15 * t_norm_ts) + (0.05 * c_norm_ts)
-        soil_norm_ts += np.random.normal(0.0, 0.03, size=rows_per_location)
-        soil_norm_ts = np.clip(soil_norm_ts, 0.0, 1.0)
-        soil_moisture_ts = np.round(soil_norm_ts * 100, 1)
-
-        # Sensor readings: create pm1/pm2/pm3/ammonia/luminosity/pressure per-time
-        pm1_ts = np.clip(10 + (100 - hum_ts) * 0.25 + np.random.normal(0.0, 5.0, rows_per_location), 0, None).round(1)
-        pm2_ts = np.clip(pm1_ts * (0.9 + np.random.normal(0.0, 0.05, rows_per_location)), 0, None).round(1)
-        pm3_ts = np.clip(pm1_ts * (0.8 + np.random.normal(0.0, 0.06, rows_per_location)), 0, None).round(1)
-        ammonia_ts = np.clip(np.random.normal(0.5, 0.2, rows_per_location), 0, None).round(2)
-        luminosity_ts = np.clip((1 - (cloud_ts / 100.0)) * 1000 + np.random.normal(0.0, 50.0, rows_per_location), 0, None).round(1)
-        pressure_ts = np.clip(np.random.normal(1013.0, 8.0, rows_per_location), 950.0, 1050.0).round(1)
-        
-        rows = []
-        for i in range(rows_per_location):
-            row = {
-                'time': date_range[i],
-                'pm1': float(pm1_ts[i]),
-                'pm2': float(pm2_ts[i]),
-                'pm3': float(pm3_ts[i]),
-                'ammonia': float(ammonia_ts[i]),
-                'luminosity': float(luminosity_ts[i]),
-                'pressure': float(pressure_ts[i]),
-                'temperature': float(temp_ts[i]),
-                'humidity': float(hum_ts[i]),
-                'rainfall': float(rain_ts[i]),
-                'cloud_cover': float(cloud_ts[i]),
-                'soil_moisture': float(soil_moisture_ts[i])
-            }
-            rows.append(row)
-
-        timeseries_df = pd.DataFrame(rows)
-        df_ts = timeseries_df
-        
-        if save_csv:
-            df_ts.to_csv(path, index=False)
-    else:
-        if save_csv:
-            df.to_csv(path, index=False)
-
-    return df
-
-
-def create_data(samples=100, plot=True, save_csv=False, path='app/data/soil_moisture_synthetic.csv'):
-    """Compatibility wrapper that returns (X, y) arrays.
-
-    X: array(N, features=4) [temperature, humidity, rainfall, cloud_cover]
-    y: array(N,) soil_moisture (0-100)
-    """
-    df = generate_soil_moisture_dataset(n_rows=samples, seed=0, save_csv=save_csv, path=path, plot=plot)
-    features = ['temperature', 'humidity', 'rainfall', 'cloud_cover']
-    X = df[features].values.astype(float)
+    
+    if save_csv:
+        df.to_csv(path, index=False)
+    
+    sensor_features = ['pm1', 'pm2', 'pm3', 'ammonia', 'luminosity', 'temperature', 'humidity', 'pressure']
+    X = df[sensor_features].values.astype(float)
     y = df['soil_moisture'].values.astype(float)
     return X, y
 
 
 if __name__ == '__main__':
-    # Simple generator demo
-    df = generate_soil_moisture_dataset(n_rows=10000, seed=1, save_csv=True, path='app/data/soil_moisture_synthetic.csv', plot=True)
-    print(df.head(6).to_string(index=False))
+    X, y = create_data(samples=1000, save_csv=True)
+    print(f"Generated {len(X)} samples with {X.shape[1]} features")

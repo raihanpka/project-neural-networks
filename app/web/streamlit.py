@@ -14,7 +14,6 @@ from app.function.layer import Dense
 from app.function.activations import ReLU, Softmax, Sigmoid, Tanh, Linear
 from app.function.regularization import BatchNormalization, Dropout
 from app.function.check_loss import CategoricalCrossentropy, MeanSquaredError, MeanAbsoluteError
-from app.data.generate_dataset import generate_soil_moisture_dataset
 from app.function.metrics import calculate_accuracy
 
 st.set_page_config(page_title="Group 1 - Neural Network (PBL AI)", layout="wide", page_icon="📊")
@@ -164,30 +163,13 @@ with st.sidebar:
 
     # Pilih sumber dataset (mutually exclusive)
     data_source = st.radio("Sumber dataset", 
-                           options=["Built-in Sensor Dataset", "Upload CSV", "Data Sintetis (Generate)"],
+                           options=["Built-in Sensor Dataset", "Upload CSV"],
                            index=0)
 
     df = None
 
-    # Synthetic dataset options
-    if data_source == "Data Sintetis (Generate)":
-        st.subheader('Buat Dataset Sintetis')
-        synth_rows = st.number_input("Jumlah baris per lokasi (period days)", min_value=30, max_value=2000, value=365)
-        synth_locations = st.number_input("Jumlah lokasi sintetis", min_value=1, max_value=100, value=5)
-        synth_seed = st.number_input("Seed (random)", min_value=0, max_value=10000, value=42, step=1)
-        if st.button('Generate Dataset'):
-            df = generate_soil_moisture_dataset(n_rows=synth_rows, seed=int(synth_seed),
-                                                save_csv=False, path=DATA_PATH, plot=False,
-                                                add_time=True, n_locations=int(synth_locations), period_days=synth_rows)
-            st.session_state['df'] = df
-            st.session_state['feature_cols'] = [c for c in ['pm1', 'pm2', 'pm3', 'ammonia', 'luminosity', 'temperature', 'humidity', 'pressure'] if c in df.columns] or [c for c in ['temperature','humidity','rainfall','cloud_cover'] if c in df.columns]
-            # default target is 'soil_moisture' for sensor dataset; fallback to last numeric column
-            numeric_cols = [c for c in df.columns if pd.api.types.is_numeric_dtype(df[c])]
-            st.session_state['target_col'] = 'soil_moisture' if 'soil_moisture' in df.columns else (numeric_cols[-1] if numeric_cols else None)
-            st.success(f'Dataset sintetis berhasil dibuat: {len(df)} baris ({synth_locations} lokasi)')
-
     # Built-in dataset options
-    elif data_source == "Built-in Sensor Dataset":
+    if data_source == "Built-in Sensor Dataset":
         st.subheader("Dataset Sensor Bawaan")
         if os.path.exists(DATA_PATH):
             if st.button("Muat Dataset Sensor Bawaan"):
@@ -268,14 +250,19 @@ with st.sidebar:
             st.session_state['soil_moisture_scale'] = st.session_state.get('soil_moisture_scale', 1000.0)
 
         st.subheader("Preprocessing")
+        
+        regression_mode = st.session_state.get('regression_mode', False)
+        
         normalize_method = st.selectbox(
             "Metode Normalisasi",
-            options=['minmax', 'zscore', 'none'],
+            options=['zscore', 'minmax', 'none'],
             format_func=lambda x: {
                 'none': 'Tidak Ada',
                 'minmax': 'Min-Max Scaling (0-1)',
                 'zscore': 'Z-Score Standardization'
-            }.get(x, x)
+            }.get(x, x),
+            index=0 if regression_mode else 1,
+            help="Z-Score lebih robust untuk outlier dibandingkan Min-Max"
         )
 
         # Simpan ke session state
@@ -412,6 +399,7 @@ with tab2:
     st.markdown("""
     Library yang digunakan untuk membangun model: 
     - Numpy
+    - Pandas
     - Matplotlib & NetworkX (untuk visualisasi)
     """)
     
@@ -432,23 +420,26 @@ with tab2:
             with col_a:
                 neurons = st.number_input(
                     f"Neurons",
-                    min_value=4, max_value=512, value=64 if i == 0 else 32,
-                    key=f"neurons_{i}"
+                    min_value=4, max_value=512, value=32,
+                    key=f"neurons_{i}",
+                    help="Untuk 1 hidden layer, coba 16-32 neurons"
                 )
                 activation = st.selectbox(
                     f"Aktivasi",
                     options=['Linear', 'Sigmoid', 'Tanh', 'Softmax', 'ReLU'],
                     index=4,
-                    key=f"activation_{i}"
+                    key=f"activation_{i}",
+                    help="Umumnya menggunakan ReLU di hidden layer"
                 )
             
             with col_b:
                 use_batchnorm = st.checkbox(f"Batch Normalization", value=True, key=f"bn_{i}")
                 dropout_rate = st.number_input(
                     f"Dropout Rate",
-                    min_value=0.0, max_value=0.9, value=0.5,
+                    min_value=0.0, max_value=0.9, value=0.2,
                     step=0.05,
-                    key=f"dropout_{i}"
+                    key=f"dropout_{i}",
+                    help="Coba 0.2-0.3 (terlalu tinggi = underfitting)"
                 )
             
             layer_config.append({
@@ -482,7 +473,7 @@ with tab2:
         regression_mode = st.session_state.get('regression_mode', False)
         if regression_mode:
             output_size = 1
-            output_label = "1 output (Regresi)"
+            output_label = "1 output"
         else:
             output_size = st.session_state.get('n_classes', 5)
             output_label = f"{output_size} kelas (Klasifikasi)"
@@ -514,15 +505,26 @@ with tab3:
     with col1:
         st.subheader("Hyperparameters")
         
-        epochs = st.number_input("Epochs", min_value=10, max_value=1000000, value=200, step=10)
-        batch_size = st.number_input("Batch Size", min_value=8, max_value=1024, value=64)
+        regression_mode = st.session_state.get('regression_mode', False)
+        
+        # Optimized defaults for regression
+        default_epochs = 500 if regression_mode else 200
+        default_batch_size = 128 if regression_mode else 64
+        default_lr = 0.001 if regression_mode else 0.005
+        
+        epochs = st.number_input("Epochs", min_value=10, max_value=1000000, value=default_epochs, step=10,
+                                help="Coba 500-1000 epochs")
+        batch_size = st.number_input("Batch Size", min_value=8, max_value=1024, value=default_batch_size,
+                                     help="Coba 128-256 (lebih stable)")
         learning_rate = st.number_input("Learning Rate", min_value=0.0001, max_value=0.1, 
-                                        value=0.005, format="%.4f")
+                                        value=default_lr, format="%.4f",
+                                        help="Coba 0.001-0.0005 (lebih kecil)")
         
         loss_function = st.selectbox(
             "Loss Function",
             options=['Mean Squared Error', 'Categorical Crossentropy', 'Mean Absolute Error'],
-            index=0
+            index=0,
+            help="Coba MSE atau MAE untuk kasus time-series atau regression, Crossentropy untuk classification"
         )
         
         regularization_l2 = 0.0001
@@ -563,18 +565,26 @@ with tab3:
                 # Save original target values for metrics (pre-normalization)
                 if target_col in _df_train.columns:
                     st.session_state['target_original_values'] = _df_train[target_col].values.astype(np.float32)
-                # (texture scaling removed; only sensor dataset supported)
-                # If sensor schema: scale soil_moisture
-                if st.session_state.get('builtin_schema', None) == 'sensor' and 'soil_moisture' in _df_train.columns:
-                    divisor = float(st.session_state.get('soil_moisture_scale', 1.0))
-                    if divisor != 1.0:
-                        _df_train['soil_moisture'] = _df_train['soil_moisture'] / divisor
+                
                 # Replace df for a training run
                 df = _df_train
             
             X = df[feature_cols].values.astype(np.float32)
             X = np.nan_to_num(X, nan=0.0)
-            X = normalize_data(X, normalize_method)
+            
+            # Simpan normalisasi parameters untuk digunakan saat prediksi
+            if normalize_method == 'minmax':
+                x_min = X.min(axis=0)
+                x_max = X.max(axis=0)
+                st.session_state['x_min'] = x_min
+                st.session_state['x_max'] = x_max
+                X = (X - x_min) / (x_max - x_min + 1e-8)
+            elif normalize_method == 'zscore':
+                x_mean = X.mean(axis=0)
+                x_std = X.std(axis=0)
+                st.session_state['x_mean'] = x_mean
+                st.session_state['x_std'] = x_std
+                X = (X - x_mean) / (x_std + 1e-8)
             
             regression_mode = st.session_state.get('regression_mode', False)
             # Keep a copy of original targets (pre-trained normalization) - already saved above for built-in
@@ -603,6 +613,35 @@ with tab3:
             
             st.info(f"Training: {len(X)} sampel, {input_size} fitur, {'1 output' if regression_mode else f'{output_neurons} kelas'}")
             
+            if regression_mode:
+                with st.expander("📊 Training Data Info"):
+                    st.write(f"**Y (normalized) range:** [{Y.min():.4f}, {Y.max():.4f}]")
+                    st.write(f"**Y (raw) range:** [{y_raw.min():.2f}, {y_raw.max():.2f}]")
+                    st.write(f"**Y (normalized) stats:**")
+                    st.write(f"- Mean: {Y.mean():.4f}, Std: {Y.std():.4f}")
+                    st.write(f"\n**Expected Performance:**")
+                    st.write(f"- Target R² untuk 1 hidden layer: 0.6 - 0.8")
+                    st.write(f"- Target MAE: < 1000 (12.6% dari range)")
+            
+            # Train/Test Split (80/20)
+            train_ratio = 0.8
+            n_samples = len(X)
+            n_train = int(n_samples * train_ratio)
+            
+            indices = np.random.permutation(n_samples)
+            train_indices = indices[:n_train]
+            test_indices = indices[n_train:]
+            
+            X_train = X[train_indices]
+            Y_train = Y[train_indices]
+            y_raw_train = y_raw[train_indices]
+            
+            X_test = X[test_indices]
+            Y_test = Y[test_indices]
+            y_raw_test = y_raw[test_indices]
+            
+            st.info(f"Train/Test Split: {len(X_train)} train, {len(X_test)} test (80/20)")
+            
             model = NeuralNetwork()
             layer_config = st.session_state['layer_config']
             
@@ -618,7 +657,17 @@ with tab3:
                 prev_neurons = layer_cfg['neurons']
             
             model.add(Dense(prev_neurons, output_neurons, learning_rate=learning_rate))
-            model.add(get_activation_class(st.session_state['output_activation'])())
+            
+            # Untuk regression: OUTPUT HARUS LINEAR (tidak boleh dibatasi range)
+            # Untuk classification: gunakan output activation dari UI
+            if regression_mode:
+                output_activation_to_use = 'Linear'
+                st.session_state['output_activation_used'] = 'Linear'
+            else:
+                output_activation_to_use = st.session_state['output_activation']
+                st.session_state['output_activation_used'] = output_activation_to_use
+            
+            model.add(get_activation_class(output_activation_to_use)())
             
             LossClass = get_loss_class(loss_function)
             if loss_function == 'Categorical Crossentropy':
@@ -651,18 +700,24 @@ with tab3:
             r2_scores = []  # Untuk menyimpan R² selama training
             mae_scores = []  # Untuk menyimpan MAE selama training
             
-            n_batches = max(len(X) // batch_size, 1)
+            # Test metrics untuk tracking overfitting
+            test_losses = []
+            test_r2_scores = []
+            test_mae_scores = []
+            
+            n_batches = max(len(X_train) // batch_size, 1)
             
             for epoch in range(epochs):
                 epoch_loss = 0
                 
-                indices = np.random.permutation(len(X))
-                X_shuffled = X[indices]
-                Y_shuffled = Y[indices]
+                # Training dengan train data saja
+                indices = np.random.permutation(len(X_train))
+                X_shuffled = X_train[indices]
+                Y_shuffled = Y_train[indices]
                 
                 for batch in range(n_batches):
                     batch_start = batch * batch_size
-                    batch_end = min(batch_start + batch_size, len(X))
+                    batch_end = min(batch_start + batch_size, len(X_train))
                     X_batch = X_shuffled[batch_start:batch_end]
                     Y_batch = Y_shuffled[batch_start:batch_end]
                     
@@ -677,22 +732,25 @@ with tab3:
                 losses.append(avg_loss)
                 
                 if epoch % 5 == 0 or epoch == epochs - 1:
-                    val_output = model.forward(X, training=False)
+                    # Validation pada TEST data (bukan training data!)
+                    val_output = model.forward(X_test, training=False)
                     if regression_mode:
                         preds = val_output.flatten()
                         y_min = st.session_state.get('target_min', 0.0)
                         y_max = st.session_state.get('target_max', 1.0)
                         denom = y_max - y_min if (y_max - y_min) != 0 else 1.0
                         preds_orig = preds * denom + y_min
-                        y_original = y_raw
+                        y_original = y_raw_test
                         mae = np.mean(np.abs(preds_orig - y_original))
                         r2 = calculate_r2_score(y_original, preds_orig)
                         accuracy = mae  # Gunakan MAE sebagai accuracy metric
                         accuracies.append(accuracy)
                         mae_scores.append(mae)
                         r2_scores.append(r2)
+                        test_mae_scores.append(mae)
+                        test_r2_scores.append(r2)
                     else:
-                        accuracy = calculate_accuracy(Y, val_output)
+                        accuracy = calculate_accuracy(Y_test, val_output)
                         accuracies.append(accuracy)
                     
                     progress = (epoch + 1) / epochs
@@ -727,7 +785,8 @@ with tab3:
             
             progress_bar.progress(1.0)
             
-            final_output = model.forward(X, training=False)
+            # Final evaluation pada TEST data (bukan training data!)
+            final_output = model.forward(X_test, training=False)
             regression_mode = st.session_state.get('regression_mode', False)
             if regression_mode:
                 preds = final_output.flatten()
@@ -735,12 +794,12 @@ with tab3:
                 y_max = st.session_state.get('target_max', 1.0)
                 denom = y_max - y_min if (y_max - y_min) != 0 else 1.0
                 preds_original = preds * denom + y_min
-                y_original = y_raw
+                y_original = y_raw_test
                 final_mae = np.mean(np.abs(preds_original - y_original))
                 final_r2 = calculate_r2_score(y_original, preds_original)
                 final_accuracy = final_mae  # simpan MAE untuk compatibility
             else:
-                final_accuracy = calculate_accuracy(Y, final_output)
+                final_accuracy = calculate_accuracy(Y_test, final_output)
                 final_r2 = None
             
             st.session_state['model'] = model
@@ -749,13 +808,19 @@ with tab3:
             st.session_state['final_accuracy'] = final_accuracy
             st.session_state['final_r2'] = final_r2
             st.session_state['r2_scores'] = r2_scores if regression_mode else []
+            st.session_state['test_r2_scores'] = test_r2_scores if regression_mode else []
+            st.session_state['test_mae_scores'] = test_mae_scores if regression_mode else []
             st.session_state['X'] = X
             st.session_state['Y'] = Y
+            st.session_state['X_test'] = X_test
+            st.session_state['Y_test'] = Y_test
             # Save original target values for downstream plotting/metrics
             st.session_state['y_raw'] = y_original
+            st.session_state['y_raw_test'] = y_raw_test
+            st.session_state['normalize_method_used'] = normalize_method
             
             if regression_mode:
-                st.success(f"Training selesai! Final MAE: {final_mae:.4f} dengan Accuracy (R²): {final_r2:.4f}")
+                st.success(f"Training selesai!")
             else:
                 st.success(f"Training selesai! Final Accuracy: {final_accuracy:.4f}")
 
@@ -767,12 +832,13 @@ with tab4:
         
         with col1:
             if st.session_state.get('regression_mode', False):
-                st.metric("Final MAE", f"{st.session_state['final_accuracy']:.4f}")
+                mae_percent = (st.session_state['final_accuracy'] / st.session_state.get('target_max', 1.0)) * 100
+                st.metric("Final MAE", f"{mae_percent:.2f}%")
             else:
                 st.metric("Final Accuracy", f"{st.session_state['final_accuracy']:.4f}")
         with col2:
             if st.session_state.get('regression_mode', False) and st.session_state.get('final_r2') is not None:
-                st.metric("Accuracy (R² Score)", f"{st.session_state['final_r2']:.4f}")
+                st.metric("R² Score", f"{st.session_state['final_r2']:.4f}")
             else:
                 st.metric("Final Loss", f"{st.session_state['losses'][-1]:.6f}")
         with col3:
@@ -808,7 +874,7 @@ with tab4:
                 ax2.fill_between(acc_epochs, r2_scores, alpha=0.3, color='#9B59B6')
                 ax2.axhline(y=1.0, color='green', linestyle='--', alpha=0.5, linewidth=2, label='Perfect (R²=1.0)')
                 ax2.set_xlabel('Epoch', fontsize=11)
-                ax2.set_ylabel('Accuracy (R² Score)', fontsize=11)
+                ax2.set_ylabel('R² Score', fontsize=11)
                 ax2.set_title('Accuracy - R² Growth', fontsize=13, fontweight='bold')
                 ax2.set_ylim([-0.1, 1.1])
                 ax2.legend(loc='lower right')
@@ -851,10 +917,14 @@ with tab4:
         
         regression_mode = st.session_state.get('regression_mode', False)
         model_obj = st.session_state['model']
-        X = st.session_state['X']
-        Y = st.session_state['Y'] if not regression_mode else st.session_state['y_raw']
+        
+        # Gunakan test data untuk analisis (konsisten dengan train/test split)
+        X_test = st.session_state.get('X_test', st.session_state.get('X'))
+        Y_test = st.session_state.get('Y_test', st.session_state.get('Y'))
+        y_raw_test = st.session_state.get('y_raw_test', st.session_state.get('y_raw'))
+        
         if regression_mode:
-            preds_proba = model_obj.predict_proba(X).flatten()
+            preds_proba = model_obj.predict_proba(X_test).flatten()
             y_min = st.session_state.get('target_min', None)
             y_max = st.session_state.get('target_max', None)
             if y_min is None or y_max is None:
@@ -862,8 +932,10 @@ with tab4:
             else:
                 denom = (y_max - y_min) if (y_max - y_min) != 0 else 1.0
                 preds_orig = preds_proba * denom + y_min
+            Y_analysis = y_raw_test
         else:
-            predictions = model_obj.predict(st.session_state['X'])
+            predictions = model_obj.predict(X_test)
+            Y_analysis = Y_test
         
         col1, col2 = st.columns(2)
         
@@ -871,17 +943,17 @@ with tab4:
             fig, ax = plt.subplots(figsize=(8, 6))
             if regression_mode:
                 # Plot predicted vs true scatter
-                ax.scatter(range(len(Y)), Y, label='True', alpha=0.5, s=10)
+                ax.scatter(range(len(Y_analysis)), Y_analysis, label='True', alpha=0.5, s=10)
                 ax.scatter(range(len(preds_orig)), preds_orig, label='Predicted', alpha=0.5, s=10)
                 ax.set_xlabel('Sample Index')
                 ax.set_ylabel('Soil Moisture')
-                ax.set_title('True vs Predicted')
+                ax.set_title('True vs Predicted (Test Set)')
                 ax.legend()
                 ax.grid(True, alpha=0.3)
             else:
-                unique_classes = np.unique(Y)
+                unique_classes = np.unique(Y_analysis)
                 pred_counts = [np.sum(predictions == c) for c in unique_classes]
-                true_counts = [np.sum(Y == c) for c in unique_classes]
+                true_counts = [np.sum(Y_analysis == c) for c in unique_classes]
                 x = np.arange(len(unique_classes))
                 width = 0.35
                 bars1 = ax.bar(x - width/2, true_counts, width, label='Actual', color='#3498DB', alpha=0.8)
@@ -899,40 +971,241 @@ with tab4:
             if regression_mode:
                 # Plot residuals distribution
                 fig, ax = plt.subplots(figsize=(8, 6))
-                residuals = preds_orig - Y
+                residuals = preds_orig - Y_analysis
                 ax.hist(residuals, bins=30, color='orange', edgecolor='white', alpha=0.7)
                 ax.set_xlabel('Residuals (Predicted - True)')
-                ax.set_title('Residuals Distribution')
+                ax.set_title('Residuals Distribution (Test Set)')
                 ax.grid(True, alpha=0.3)
                 st.pyplot(fig)
             else:
-                if 'y_raw' in st.session_state and 'bin_edges' in st.session_state:
+                if 'y_raw_test' in st.session_state and 'bin_edges' in st.session_state:
                     fig, ax = plt.subplots(figsize=(8, 6))
-                    correct = predictions == Y
-                    y_raw = st.session_state['y_raw']
-                    ax.scatter(range(len(y_raw)), y_raw, c=correct, cmap='RdYlGn', alpha=0.5, s=10)
+                    correct = predictions == Y_analysis
+                    y_raw_test = st.session_state['y_raw_test']
+                    ax.scatter(range(len(y_raw_test)), y_raw_test, c=correct, cmap='RdYlGn', alpha=0.5, s=10)
                     ax.set_xlabel('Sample Index')
                     ax.set_ylabel('Soil Moisture')
-                    ax.set_title('Prediksi per Sampel (Hijau=Benar, Merah=Salah)')
+                    ax.set_title('Prediksi per Sampel - Test Set (Hijau=Benar, Merah=Salah)')
                     ax.grid(True, alpha=0.3)
                     st.pyplot(fig)
         
-        st.subheader("Sample Prediksi")
-        
-        n_samples = len(Y) if not regression_mode else len(Y)
-        sample_size = min(100, n_samples)
-        sample_idx = np.random.choice(n_samples, sample_size, replace=False)
+        st.subheader("Evaluasi Detail pada Test Set")
         
         if regression_mode:
-            results_df = pd.DataFrame({
-                'Sample': sample_idx,
-                'True Value': Y[sample_idx],
-                'Predicted Value': preds_orig[sample_idx],
-                'Abs Error': np.abs(preds_orig[sample_idx] - Y[sample_idx])
-            })
-            avg_error = results_df['Abs Error'].mean()
-            st.markdown(f"**Avg Abs Error (sample)**: {avg_error:.3f}")
+            # Untuk regression: gunakan TEST SET langsung (20% data)
+            st.markdown("**Prediksi pada Test Set (20% dari seluruh data):**")
+            
+            # Langsung gunakan test set yang sudah ada
+            if 'X_test' in st.session_state and 'y_raw_test' in st.session_state:
+                X_test = st.session_state['X_test']
+                y_true = st.session_state['y_raw_test']
+                
+                # Prediksi
+                pred_normalized = model_obj.predict_proba(X_test).flatten()
+                y_min = st.session_state.get('target_min', 0.0)
+                y_max = st.session_state.get('target_max', 1.0)
+                denom = (y_max - y_min) if (y_max - y_min) != 0 else 1.0
+                pred_orig = pred_normalized * denom + y_min
+                
+                # Hitung metrics
+                abs_errors = np.abs(pred_orig - y_true)
+                mae = abs_errors.mean()
+                mae_percent = (mae / y_max) * 100  # MAE dalam persen dari range
+                r2 = calculate_r2_score(y_true, pred_orig)
+                rmse = np.sqrt(np.mean((pred_orig - y_true) ** 2))
+                rmse_percent = (rmse / y_max) * 100  # RMSE dalam persen
+                mape = np.mean(np.abs((y_true - pred_orig) / (y_true + 1e-8))) * 100  # Mean Absolute Percentage Error
+                
+                # Tampilkan metrics
+                col1, col2, col3, col4 = st.columns(4)
+                with col1:
+                    st.metric("MAE", f"{mae_percent:.2f}%", help=f"Mean Absolute Error: {mae:.0f} dari range {y_max:.0f}")
+                with col2:
+                    st.metric("RMSE", f"{rmse_percent:.2f}%", help=f"Root Mean Squared Error: {rmse:.0f}")
+                with col3:
+                    st.metric("R² Score", f"{r2:.4f}", help="Coefficient of Determination (0-1, lebih tinggi lebih baik)")
+                with col4:
+                    st.metric("Test Samples", f"{len(y_true):,}")
+                
+                # Sample preview (ambil 100 sampel random untuk ditampilkan)
+                sample_size = min(100, len(y_true))
+                sample_idx = np.random.choice(len(y_true), sample_size, replace=False)
+                
+                results_df = pd.DataFrame({
+                    'Index': sample_idx,
+                    'True Value': y_true[sample_idx],
+                    'Predicted': pred_orig[sample_idx],
+                    'Error': abs_errors[sample_idx],
+                    'Error %': (abs_errors[sample_idx] / (y_true[sample_idx] + 1e-8)) * 100
+                })
+                
+                st.markdown("**Preview 100 Sample dari Test Set:**")
+                st.dataframe(
+                    results_df.style.format({
+                        'True Value': '{:.2f}',
+                        'Predicted': '{:.2f}',
+                        'Error': '{:.2f}',
+                        'Error %': '{:.2f}%'
+                    }).background_gradient(subset=['Error %'], cmap='RdYlGn_r', vmin=0, vmax=30),
+                    width='stretch'
+                )
+                
+                # Analisis distribusi error
+                with st.expander("Analisis Distribusi Error"):
+                    col1, col2 = st.columns(2)
+                    
+                    with col1:
+                        fig, ax = plt.subplots(figsize=(8, 5))
+                        ax.hist(abs_errors, bins=50, color='coral', edgecolor='white', alpha=0.7)
+                        ax.axvline(mae, color='red', linestyle='--', linewidth=2, label=f'MAE = {mae:.2f}')
+                        ax.set_xlabel('Absolute Error')
+                        ax.set_ylabel('Frequency')
+                        ax.set_title('Distribusi Absolute Error (Test Set)')
+                        ax.legend()
+                        ax.grid(True, alpha=0.3)
+                        st.pyplot(fig)
+                    
+                    with col2:
+                        fig, ax = plt.subplots(figsize=(8, 5))
+                        ax.scatter(y_true, pred_orig, alpha=0.3, s=10, color='steelblue')
+                        ax.plot([y_true.min(), y_true.max()], [y_true.min(), y_true.max()], 
+                               'r--', linewidth=2, label='Perfect Prediction')
+                        ax.set_xlabel('True Value')
+                        ax.set_ylabel('Predicted Value')
+                        ax.set_title('Scatter: True vs Predicted')
+                        ax.legend()
+                        ax.grid(True, alpha=0.3)
+                        st.pyplot(fig)
+                    
+                    # Error stats
+                    st.write("**Error Statistics:**")
+                    error_stats = {
+                        'Min Error': abs_errors.min(),
+                        'Max Error': abs_errors.max(),
+                        'Median Error': np.median(abs_errors),
+                        'Std Error': abs_errors.std(),
+                        '% Predictions with <10% Error': (abs_errors / (y_true + 1e-8) < 0.1).mean() * 100,
+                        '% Predictions with <20% Error': (abs_errors / (y_true + 1e-8) < 0.2).mean() * 100,
+                    }
+                    for key, val in error_stats.items():
+                        st.write(f"- **{key}**: {val:.2f}")
+            
+            else:
+                df = st.session_state.get('df', None)
+                feature_cols = st.session_state.get('feature_cols', [])
+                target_col = st.session_state.get('target_col', None)
+                
+                if df is not None and feature_cols and target_col:
+                    # Debug: Tampilkan normalisasi info
+                    with st.expander("Debug Info"):
+                        st.write("**Normalisasi Parameters:**")
+                        st.write(f"- Method: {st.session_state.get('normalize_method_used', 'N/A')}")
+                        st.write(f"- Target Min: {st.session_state.get('target_min', 'N/A')}")
+                        st.write(f"- Target Max: {st.session_state.get('target_max', 'N/A')}")
+                        st.write(f"- Output Activation (UI): {st.session_state.get('output_activation', 'N/A')}")
+                        st.write(f"- Output Activation (Used): {st.session_state.get('output_activation_used', 'N/A')} ⚠️ For regression, forced to Linear")
+                        
+                        if st.session_state.get('normalize_method_used') == 'minmax':
+                            x_min = st.session_state.get('x_min', None)
+                            x_max = st.session_state.get('x_max', None)
+                            if x_min is not None:
+                                st.write(f"- X Min (per feature): {x_min[:3]}...")
+                                st.write(f"- X Max (per feature): {x_max[:3]}...")
+                        
+                        st.write("\n**Training Data Range:**")
+                        st.write(f"- Y normalized range: [0, 1]")
+                        st.write(f"- Y original range: [{st.session_state.get('target_min', 'N/A')}, {st.session_state.get('target_max', 'N/A')}]")
+                        
+                        st.write("\n**Denormalisasi Formula:**")
+                        y_min = st.session_state.get('target_min', 0.0)
+                        y_max = st.session_state.get('target_max', 1.0)
+                        st.write(f"pred_original = pred_normalized * ({y_max} - {y_min}) + {y_min}")
+                        st.write(f"pred_original = pred_normalized * {y_max - y_min} + {y_min}")
+                    
+                    # Ambil 5 sampel random
+                    sample_indices = np.random.choice(len(df), min(5, len(df)), replace=False)
+                    
+                    # Extract fitur dan target dari dataset asli
+                    X_sample = df.iloc[sample_indices][feature_cols].values.astype(np.float32)
+                    X_sample = np.nan_to_num(X_sample, nan=0.0)
+                    
+                    # Normalisasi menggunakan parameters dari training data (KONSISTEN)
+                    normalize_method_used = st.session_state.get('normalize_method_used', 'minmax')
+                    if normalize_method_used == 'minmax':
+                        x_min = st.session_state.get('x_min', None)
+                        x_max = st.session_state.get('x_max', None)
+                        if x_min is not None and x_max is not None:
+                            X_sample = (X_sample - x_min) / (x_max - x_min + 1e-8)
+                        else:
+                            st.error("Normalisasi parameters tidak ditemukan. Lakukan training terlebih dahulu.")
+                            st.stop()
+                    elif normalize_method_used == 'zscore':
+                        x_mean = st.session_state.get('x_mean', None)
+                        x_std = st.session_state.get('x_std', None)
+                        if x_mean is not None and x_std is not None:
+                            X_sample = (X_sample - x_mean) / (x_std + 1e-8)
+                        else:
+                            st.error("Normalisasi parameters tidak ditemukan. Lakukan training terlebih dahulu.")
+                            st.stop()
+                    
+                    y_sample = df.iloc[sample_indices][target_col].values.astype(np.float32)
+                    
+                    # Prediksi dengan model
+                    pred_sample = model_obj.predict_proba(X_sample).flatten()
+                    
+                    # Debug: Lihat output raw dari model
+                    with st.expander("🔍 Raw Model Output (Debug)"):
+                        st.write("**Output raw model (sebelum denormalisasi):**")
+                        for i, (idx, pred) in enumerate(zip(sample_indices, pred_sample)):
+                            st.write(f"Sample {i}: Raw pred = {pred:.6f}")
+                        
+                        st.write(f"\n**Raw Output Stats:**")
+                        st.write(f"- Min: {pred_sample.min():.6f}")
+                        st.write(f"- Max: {pred_sample.max():.6f}")
+                        st.write(f"- Mean: {pred_sample.mean():.6f}")
+                        st.write(f"- Std: {pred_sample.std():.6f}")
+                        
+                        st.write(f"\n**Expected range:** [0, 1] (normalized)")
+                        st.write(f"**After denormalization range:** [{st.session_state.get('target_min', 0.0)}, {st.session_state.get('target_max', 1.0)}]")
+                    
+                    y_min = st.session_state.get('target_min', 0.0)
+                    y_max = st.session_state.get('target_max', 1.0)
+                    denom = (y_max - y_min) if (y_max - y_min) != 0 else 1.0
+                    pred_sample_orig = pred_sample * denom + y_min
+                    
+                    # Buat DataFrame hasil
+                    results_df = pd.DataFrame({
+                        'Sample Index': sample_indices,
+                        'True Value': y_sample,
+                        'Predicted Value': pred_sample_orig,
+                        'Abs Error': np.abs(pred_sample_orig - y_sample)
+                    })
+                    
+                    avg_error = results_df['Abs Error'].mean()
+                    r2_test = calculate_r2_score(y_sample, pred_sample_orig)
+                    
+                    col1, col2 = st.columns(2)
+                    with col1:
+                        st.metric("Avg Abs Error", f"{avg_error:.3f}")
+                    with col2:
+                        st.metric("R² Score", f"{r2_test:.4f}")
+                    
+                        st.dataframe(
+                            results_df.style.format({
+                                'True Value': '{:.2f}',
+                                'Predicted Value': '{:.2f}',
+                                'Abs Error': '{:.2f}'
+                            }),
+                            width='stretch'
+                        )
+                else:
+                    st.warning("⚠️ Test set tidak tersedia. Lakukan training terlebih dahulu.")
         else:
+            # Untuk classification: tampilkan dari predictions yang sudah ada
+            n_samples = len(Y)
+            sample_size = min(100, n_samples)
+            sample_idx = np.random.choice(n_samples, sample_size, replace=False)
+            
             results_df = pd.DataFrame({
                 'Sample': sample_idx,
                 'True Class': Y[sample_idx],
@@ -941,16 +1214,13 @@ with tab4:
             })
             correct_pct = results_df['Correct'].mean() * 100
             st.markdown(f"**Akurasi Sample**: {correct_pct:.1f}%")
-        
-            if regression_mode:
-                st.dataframe(results_df.style.format({'True Value':'{:.3f}','Predicted Value':'{:.3f}','Abs Error':'{:.3f}'}), width='stretch')
-            else:
-                st.dataframe(
-                    results_df.style.apply(
-                        lambda x: ['background-color: #d4edda' if v else 'background-color: #f8d7da' for v in x], subset=['Correct']
-                    ),
-                    width='stretch'
-                )
+            
+            st.dataframe(
+                results_df.style.apply(
+                    lambda x: ['background-color: #d4edda' if v else 'background-color: #f8d7da' for v in x], subset=['Correct']
+                ),
+                width='stretch'
+            )
         
     else:
         st.info("Lakukan training terlebih dahulu untuk melihat hasil")

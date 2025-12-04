@@ -14,12 +14,13 @@ class BaseRegularization:
         raise NotImplementedError
 
 class BatchNormalization(BaseRegularization):
-    def __init__(self, epsilon=1e-5, momentum=0.9):
+    def __init__(self, epsilon=1e-5, momentum=0.9, learning_rate=0.01):
         """
         Inisialisasi parameter BatchNormalization.
         """
         self.epsilon = epsilon  # Parameter untuk menghindari dividenya nol
         self.momentum = momentum  # Parameter untuk mengatur momentum
+        self.learning_rate = learning_rate  # Learning rate untuk gradient descent
         self.running_mean = None  # Mean pada training
         self.running_var = None   # Var pada training
         self.gamma = None        # Scale atau shift
@@ -63,12 +64,23 @@ class BatchNormalization(BaseRegularization):
 
     def backward(self, dvalues):
         """
-        Melakukan proses backward untuk BatchNormalization.
+        Melakukan proses backward untuk BatchNormalization dengan Gradient Descent.
         """
         batch_size = dvalues.shape[0]
         
+        # Hitung gradient (Backpropagation)
         self.dgamma = np.sum(dvalues * self.x_norm, axis=0)  # Menghitung dgamma
         self.dbeta = np.sum(dvalues, axis=0)  # Menghitung dbeta
+        
+        # Gradient Clipping untuk stabilitas
+        self.dgamma = np.clip(self.dgamma, -1.0, 1.0)
+        self.dbeta = np.clip(self.dbeta, -1.0, 1.0)
+        
+        # GRADIENT DESCENT untuk gamma dan beta
+        # γ = γ - α × ∇L/∂γ
+        # β = β - α × ∇L/∂β
+        self.gamma -= self.learning_rate * self.dgamma
+        self.beta -= self.learning_rate * self.dbeta
         
         dx_norm = dvalues * self.gamma  # Menghitung dx_norm
         dvar = np.sum(dx_norm * self.x_centered * -0.5 * self.std**(-3), axis=0)  # Menghitung dvar
