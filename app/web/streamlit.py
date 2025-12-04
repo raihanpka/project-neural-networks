@@ -14,7 +14,7 @@ from app.function.layer import Dense
 from app.function.activations import ReLU, Softmax, Sigmoid, Tanh, Linear
 from app.function.regularization import BatchNormalization, Dropout
 from app.function.check_loss import CategoricalCrossentropy, MeanSquaredError, MeanAbsoluteError
-from app.function.metrics import calculate_accuracy
+from app.function.metrics import calculate_accuracy, calculate_r2_score, calculate_mae, calculate_rmse, calculate_mape
 
 st.set_page_config(page_title="Group 1 - Neural Network (PBL AI)", layout="wide", page_icon="📊")
 
@@ -28,19 +28,6 @@ def normalize_data(data, method='minmax'):
     elif method == 'none':
         return data
     return data
-
-
-def calculate_r2_score(y_true, y_pred):
-    """Hitung R² (coefficient of determination)
-    R² = 1 - (SS_res / SS_tot)
-    Nilai berkisar dari -inf hingga 1.0, dimana 1.0 adalah perfect prediction
-    """
-    ss_res = np.sum((y_true - y_pred) ** 2)  # residual sum of squares
-    ss_tot = np.sum((y_true - np.mean(y_true)) ** 2)  # total sum of squares
-    if ss_tot == 0:
-        return 0.0
-    r2 = 1 - (ss_res / ss_tot)
-    return r2
 
 
 def get_activation_class(name):
@@ -172,7 +159,7 @@ with st.sidebar:
     if data_source == "Built-in Sensor Dataset":
         st.subheader("Dataset Sensor Bawaan")
         if os.path.exists(DATA_PATH):
-            if st.button("Muat Dataset Sensor Bawaan"):
+            if st.button("Muat Dataset Bawaan"):
                 try:
                     df = pd.read_csv(DATA_PATH)
                     df.columns = df.columns.str.strip().str.lower().str.replace(' ', '_')
@@ -221,7 +208,7 @@ with st.sidebar:
         st.subheader("Pilih Kolom")
         numeric_columns = df.select_dtypes(include=[np.number]).columns.tolist()
 
-        default_features = ['pm1', 'pm2', 'pm3', 'ammonia', 'luminosity', 'temperature', 'humidity', 'pressure']
+        default_features = ['pm1', 'pm2', 'pm3', 'luminosity', 'temperature', 'humidity', 'pressure']
         default_features = [f for f in default_features if f in numeric_columns]
 
         feature_cols = st.multiselect(
@@ -251,18 +238,25 @@ with st.sidebar:
 
         st.subheader("Preprocessing")
         
+        st.info("""
+        Data Preprocessing:
+        - Ammonia dihapus: 78.6% nilai 0, 21.4% outlier, korelasi lemah (-0.43)
+        - Fitur aktif: PM1, PM2, PM3, Luminosity, Temperature, Humidity, Pressure (7 fitur)
+        - Target: Soil Moisture (regression kontinyu, range 0-7937)
+        """)
+        
         regression_mode = st.session_state.get('regression_mode', False)
         
         normalize_method = st.selectbox(
             "Metode Normalisasi",
-            options=['zscore', 'minmax', 'none'],
+            options=['minmax', 'zscore', 'none'],
             format_func=lambda x: {
                 'none': 'Tidak Ada',
                 'minmax': 'Min-Max Scaling (0-1)',
                 'zscore': 'Z-Score Standardization'
             }.get(x, x),
-            index=0 if regression_mode else 1,
-            help="Z-Score lebih robust untuk outlier dibandingkan Min-Max"
+            index=0,
+            help="Min-Max Scaling: (x-min)/(max-min). Formula: nilai dipetakan ke range [0,1]"
         )
 
         # Simpan ke session state
@@ -475,8 +469,8 @@ with tab2:
             output_size = 1
             output_label = "1 output"
         else:
-            output_size = st.session_state.get('n_classes', 5)
-            output_label = f"{output_size} kelas (Klasifikasi)"
+            output_size = st.session_state.get('n_classes', 1)
+            output_label = f"{output_size} kelas"
         
         layer_sizes = [input_size] + [l['neurons'] for l in layer_config] + [output_size]
         layer_names = ['Input'] + [f'Hidden {i+1}' for i in range(len(layer_config))] + ['Output']
@@ -522,8 +516,8 @@ with tab3:
         
         loss_function = st.selectbox(
             "Loss Function",
-            options=['Mean Squared Error', 'Categorical Crossentropy', 'Mean Absolute Error'],
-            index=0,
+            options=['Mean Squared Error', 'Mean Absolute Error', 'Categorical Crossentropy'],
+            index=1,
             help="Coba MSE atau MAE untuk kasus time-series atau regression, Crossentropy untuk classification"
         )
         
@@ -612,19 +606,9 @@ with tab3:
                 output_neurons = len(np.unique(Y))
             
             st.info(f"Training: {len(X)} sampel, {input_size} fitur, {'1 output' if regression_mode else f'{output_neurons} kelas'}")
-            
-            if regression_mode:
-                with st.expander("📊 Training Data Info"):
-                    st.write(f"**Y (normalized) range:** [{Y.min():.4f}, {Y.max():.4f}]")
-                    st.write(f"**Y (raw) range:** [{y_raw.min():.2f}, {y_raw.max():.2f}]")
-                    st.write(f"**Y (normalized) stats:**")
-                    st.write(f"- Mean: {Y.mean():.4f}, Std: {Y.std():.4f}")
-                    st.write(f"\n**Expected Performance:**")
-                    st.write(f"- Target R² untuk 1 hidden layer: 0.6 - 0.8")
-                    st.write(f"- Target MAE: < 1000 (12.6% dari range)")
-            
-            # Train/Test Split (80/20)
-            train_ratio = 0.8
+
+            # Train/Test Split (70/30)
+            train_ratio = 0.7
             n_samples = len(X)
             n_train = int(n_samples * train_ratio)
             
@@ -640,7 +624,7 @@ with tab3:
             Y_test = Y[test_indices]
             y_raw_test = y_raw[test_indices]
             
-            st.info(f"Train/Test Split: {len(X_train)} train, {len(X_test)} test (80/20)")
+            st.info(f"Train/Test Split: {len(X_train)} train, {len(X_test)} test")
             
             model = NeuralNetwork()
             layer_config = st.session_state['layer_config']
@@ -937,7 +921,7 @@ with tab4:
             predictions = model_obj.predict(X_test)
             Y_analysis = Y_test
         
-        col1, col2 = st.columns(2)
+        col1 = st.columns(1)[0]
         
         with col1:
             fig, ax = plt.subplots(figsize=(8, 6))
@@ -966,28 +950,6 @@ with tab4:
                 ax.legend()
                 ax.grid(True, alpha=0.3, axis='y')
             st.pyplot(fig)
-        
-        with col2:
-            if regression_mode:
-                # Plot residuals distribution
-                fig, ax = plt.subplots(figsize=(8, 6))
-                residuals = preds_orig - Y_analysis
-                ax.hist(residuals, bins=30, color='orange', edgecolor='white', alpha=0.7)
-                ax.set_xlabel('Residuals (Predicted - True)')
-                ax.set_title('Residuals Distribution (Test Set)')
-                ax.grid(True, alpha=0.3)
-                st.pyplot(fig)
-            else:
-                if 'y_raw_test' in st.session_state and 'bin_edges' in st.session_state:
-                    fig, ax = plt.subplots(figsize=(8, 6))
-                    correct = predictions == Y_analysis
-                    y_raw_test = st.session_state['y_raw_test']
-                    ax.scatter(range(len(y_raw_test)), y_raw_test, c=correct, cmap='RdYlGn', alpha=0.5, s=10)
-                    ax.set_xlabel('Sample Index')
-                    ax.set_ylabel('Soil Moisture')
-                    ax.set_title('Prediksi per Sampel - Test Set (Hijau=Benar, Merah=Salah)')
-                    ax.grid(True, alpha=0.3)
-                    st.pyplot(fig)
         
         st.subheader("Evaluasi Detail pada Test Set")
         
@@ -1047,48 +1009,24 @@ with tab4:
                         'Error': '{:.2f}',
                         'Error %': '{:.2f}%'
                     }).background_gradient(subset=['Error %'], cmap='RdYlGn_r', vmin=0, vmax=30),
-                    width='stretch'
+                    width='stretch',
                 )
                 
                 # Analisis distribusi error
-                with st.expander("Analisis Distribusi Error"):
-                    col1, col2 = st.columns(2)
-                    
-                    with col1:
-                        fig, ax = plt.subplots(figsize=(8, 5))
-                        ax.hist(abs_errors, bins=50, color='coral', edgecolor='white', alpha=0.7)
-                        ax.axvline(mae, color='red', linestyle='--', linewidth=2, label=f'MAE = {mae:.2f}')
-                        ax.set_xlabel('Absolute Error')
-                        ax.set_ylabel('Frequency')
-                        ax.set_title('Distribusi Absolute Error (Test Set)')
-                        ax.legend()
-                        ax.grid(True, alpha=0.3)
-                        st.pyplot(fig)
-                    
-                    with col2:
-                        fig, ax = plt.subplots(figsize=(8, 5))
-                        ax.scatter(y_true, pred_orig, alpha=0.3, s=10, color='steelblue')
-                        ax.plot([y_true.min(), y_true.max()], [y_true.min(), y_true.max()], 
-                               'r--', linewidth=2, label='Perfect Prediction')
-                        ax.set_xlabel('True Value')
-                        ax.set_ylabel('Predicted Value')
-                        ax.set_title('Scatter: True vs Predicted')
-                        ax.legend()
-                        ax.grid(True, alpha=0.3)
-                        st.pyplot(fig)
-                    
-                    # Error stats
-                    st.write("**Error Statistics:**")
+                with st.expander("Analisis Statistik Distribusi Error"):
+                    min_error = abs_errors.min() / (y_max - y_min) * 100
+                    max_error = abs_errors.max() / (y_max - y_min) * 100
+                    median_error = np.median(abs_errors) / (y_max - y_min) * 100
+                    std_error = abs_errors.std() / (y_max - y_min) * 100
+
                     error_stats = {
-                        'Min Error': abs_errors.min(),
-                        'Max Error': abs_errors.max(),
-                        'Median Error': np.median(abs_errors),
-                        'Std Error': abs_errors.std(),
-                        '% Predictions with <10% Error': (abs_errors / (y_true + 1e-8) < 0.1).mean() * 100,
-                        '% Predictions with <20% Error': (abs_errors / (y_true + 1e-8) < 0.2).mean() * 100,
+                        'Min Error': min_error,
+                        'Max Error': max_error,
+                        'Median Error': median_error,
+                        'Std Error': std_error,
                     }
                     for key, val in error_stats.items():
-                        st.write(f"- **{key}**: {val:.2f}")
+                        st.write(f"- **{key}**: {val:.4f}%")
             
             else:
                 df = st.session_state.get('df', None)
@@ -1152,21 +1090,6 @@ with tab4:
                     
                     # Prediksi dengan model
                     pred_sample = model_obj.predict_proba(X_sample).flatten()
-                    
-                    # Debug: Lihat output raw dari model
-                    with st.expander("🔍 Raw Model Output (Debug)"):
-                        st.write("**Output raw model (sebelum denormalisasi):**")
-                        for i, (idx, pred) in enumerate(zip(sample_indices, pred_sample)):
-                            st.write(f"Sample {i}: Raw pred = {pred:.6f}")
-                        
-                        st.write(f"\n**Raw Output Stats:**")
-                        st.write(f"- Min: {pred_sample.min():.6f}")
-                        st.write(f"- Max: {pred_sample.max():.6f}")
-                        st.write(f"- Mean: {pred_sample.mean():.6f}")
-                        st.write(f"- Std: {pred_sample.std():.6f}")
-                        
-                        st.write(f"\n**Expected range:** [0, 1] (normalized)")
-                        st.write(f"**After denormalization range:** [{st.session_state.get('target_min', 0.0)}, {st.session_state.get('target_max', 1.0)}]")
                     
                     y_min = st.session_state.get('target_min', 0.0)
                     y_max = st.session_state.get('target_max', 1.0)

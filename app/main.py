@@ -11,11 +11,11 @@ from app.function.layer import Dense
 from app.function.activations import ReLU, Softmax, Linear
 from app.function.regularization import BatchNormalization, Dropout
 from app.function.check_loss import CategoricalCrossentropy, MeanSquaredError
-from app.function.metrics import calculate_accuracy
+from app.function.metrics import calculate_accuracy, calculate_r2_score, calculate_mae, calculate_rmse
 from app.data.generate_dataset import create_data
 
-# Normalisasi min-max untuk array numpy
-def _minmax_scale_np(arr, minv=None, maxv=None):
+# Min-Max Scaling Normalization
+def minmax_scale_np(arr, minv=None, maxv=None):
     arr = np.array(arr, dtype=float)
     if minv is None:
         minv = arr.min(axis=0)
@@ -25,139 +25,100 @@ def _minmax_scale_np(arr, minv=None, maxv=None):
     scaled = (arr - minv) / denom
     return scaled, minv, maxv
 
-# Diskretisasi target untuk klasifikasi
+# Discretize continuous target into classes
 def discretize_target(y, n_bins=5):
     percentiles = np.percentile(y, np.linspace(0, 100, n_bins + 1))
     labels = np.digitize(y, percentiles[1:-1])
     return labels, percentiles
 
-# Membuat urutan data time series yang di-flattenkan
-def create_sequences_flattened(df, features, target, seq_len):
-    """Create flattened sliding windows from the entire dataframe."""
-    # Sort by time if available
-    df_sorted = df.sort_values('time') if 'time' in df.columns else df
+
+def main(dataset_path='app/data/soil_moisture_level.csv', epochs=500, batch_size=128, lr=0.001, regression=True):
+    print('Starting Neural Network Training Pipeline')
     
-    feat_arr = df_sorted[features].values
-    target_arr = df_sorted[target].values
+    df = pd.read_csv(dataset_path)
+    print(f'Dataset loaded: {len(df)} samples')
     
-    Xf = []
-    Yf = []
-    for i in range(len(feat_arr) - seq_len):
-        win = feat_arr[i:i + seq_len]
-        Xf.append(win.flatten())
-        Yf.append(target_arr[i + seq_len])
-    
-    Xf = np.array(Xf, dtype=float)
-    Yf = np.array(Yf, dtype=float)
-    return Xf, Yf
-
-# Melatih dan mengevaluasi model
-def train_and_eval_model(X, Y, is_regression=False, n_classes=5, epochs=100, batch_size=64, lr=0.005):
-    # Membangun model berdasarkan arsitektur default sederhana yang mirip dengan aplikasi lainnya
-    input_size = X.shape[1]
-    model = NeuralNetwork()
-    model.add(Dense(input_size, 128, learning_rate=lr))
-    model.add(BatchNormalization())
-    model.add(ReLU())
-    model.add(Dropout(0.1))
-    model.add(Dense(128, 64, learning_rate=lr))
-    model.add(BatchNormalization())
-    model.add(ReLU())
-    model.add(Dropout(0.1))
-    if not is_regression:
-        # Memastikan Y dalam bentuk label integer untuk klasifikasi
-        Y_arr = np.array(Y)
-        if Y_arr.ndim > 1:
-            Y_flat = Y_arr.flatten()
-        else:
-            Y_flat = Y_arr
-        # Jika float atau banyak nilai unik -> diskretisasi menjadi n_classes
-        if Y_flat.dtype.kind in 'fc' or len(np.unique(Y_flat)) > n_classes:
-            Y_classes, _ = discretize_target(Y_flat, n_bins=n_classes)
-        else:
-            Y_classes = Y_flat.astype(int)
-        model.add(Dense(64, n_classes, learning_rate=lr))
-        model.add(Softmax())
-        model.set_loss(CategoricalCrossentropy(regularization_l2=1e-4))
-        model.train(X, Y_classes, epochs=epochs, batch_size=batch_size)
-        preds = model.predict_proba(X)
-        acc = calculate_accuracy(Y_classes, preds)
-        return model, acc, None
-    else:
-        model.add(Dense(64, 1, learning_rate=lr))
-        model.add(Linear())
-        model.set_loss(MeanSquaredError())
-        model.train(X, Y.reshape(-1, 1), epochs=epochs, batch_size=batch_size)
-        preds = model.predict_proba(X).flatten()
-        mae = np.mean(np.abs(preds - Y.flatten()))
-        return model, mae, None
-
-
-def main(dataset_path='app/data/soil_moisture_level.csv', use_timeseries=False, generate=False, seq_length=15, n_classes=5, epochs=100, batch_size=64, lr=0.005, regression=False):
-    print('Starting pipeline...')
-    if generate:
-        print('Generating synthetic dataset...')
-        X, Y = create_data(samples=1000)
-        is_reg = regression
-        model, metric, _ = train_and_eval_model(X, Y, is_reg, n_classes=n_classes, epochs=epochs, batch_size=batch_size, lr=lr)
-        print('Done. Metric:', metric)
-        return
-    elif os.path.exists(dataset_path):
-        df = pd.read_csv(dataset_path)
-    else:
-        # Use inline create_data wrapper for simple synthetic tabular data
-        X, Y = create_data(samples=1000)
-        is_reg = regression
-        model, metric, _ = train_and_eval_model(X, Y, is_reg, n_classes=n_classes, epochs=epochs, batch_size=batch_size, lr=lr)
-        print('Done. Metric:', metric)
-        return
-
-    # Normalize columns
     df.columns = df.columns.str.strip().str.lower().str.replace(' ', '_')
-    # map ttime -> time if present
     if 'ttime' in df.columns and 'time' not in df.columns:
         df.rename(columns={'ttime': 'time'}, inplace=True)
-    if 'time' in df.columns:
-        df['time'] = pd.to_datetime(df['time'])
-
-    # Choose features for sensor dataset (if available) otherwise fallback to numeric columns
-    if 'pm1' in df.columns and 'soil_moisture' in df.columns:
-        feature_cols = [c for c in ['pm1', 'pm2', 'pm3', 'ammonia', 'luminosity', 'temperature', 'humidity', 'pressure'] if c in df.columns]
-        target_col = 'soil_moisture'
-    else:
-        numeric_feats = [c for c in df.columns if pd.api.types.is_numeric_dtype(df[c])]
-        if len(numeric_feats) >= 2:
-            feature_cols = numeric_feats[:-1]
-            target_col = numeric_feats[-1]
-        else:
-            raise RuntimeError('No suitable feature/target columns found in dataset')
-
-    # Create sequences from the entire dataset
-    X_seq, Y_seq = create_sequences_flattened(train_df_scaled, feature_cols, target_col, seq_length)
-    if X_seq.size == 0:
-        raise RuntimeError('No sequences generated')
-
-    if not regression:
-        Y_classes, edges = discretize_target(Y_seq, n_bins=n_classes)
-        model, metric, _ = train_and_eval_model(X_seq, Y_classes, is_regression=False, n_classes=n_classes, epochs=epochs, batch_size=batch_size, lr=lr)
-        print('Train accuracy:', metric)
-    else:
-        model, metric, _ = train_and_eval_model(X_seq, Y_seq, is_regression=True, n_classes=n_classes, epochs=epochs, batch_size=batch_size, lr=lr)
-        print('Train MAE:', metric)
-
-    # No holdout evaluation required; completed training on full dataset
+    
+    # Feature selection: 7 features (ammonia removed)
+    feature_cols = ['pm1', 'pm2', 'pm3', 'luminosity', 'temperature', 'humidity', 'pressure']
+    feature_cols = [c for c in feature_cols if c in df.columns]
+    target_col = 'soil_moisture'
+    
+    if target_col not in df.columns:
+        raise ValueError(f'Target column {target_col} not found')
+    
+    print(f'Features: {feature_cols}')
+    print(f'Target: {target_col}')
+    
+    # Extract and normalize data
+    X = df[feature_cols].values.astype(np.float32)
+    X = np.nan_to_num(X, nan=0.0)
+    Y = df[target_col].values.astype(np.float32)
+    
+    print(f'X shape: {X.shape}, Y shape: {Y.shape}')
+    print(f'Y range: [{Y.min():.2f}, {Y.max():.2f}]')
+    
+    # Min-Max Normalization
+    X_norm, x_min, x_max = minmax_scale_np(X)
+    Y_norm = (Y - Y.min()) / (Y.max() - Y.min())
+    
+    print(f'Data normalized (Min-Max Scaling)')
+    print('='*60)
+    
+    # Train-test split (80-20)
+    n_train = int(0.8 * len(X_norm))
+    indices = np.random.permutation(len(X_norm))
+    train_idx = indices[:n_train]
+    test_idx = indices[n_train:]
+    
+    X_train = X_norm[train_idx]
+    Y_train = Y_norm[train_idx]
+    X_test = X_norm[test_idx]
+    Y_test = Y_norm[test_idx]
+    
+    print(f'Train set: {len(X_train)} samples')
+    print(f'Test set: {len(X_test)} samples')
+    
+    # Build and train model
+    input_size = X_train.shape[1]
+    model = NeuralNetwork()
+    
+    model.add(Dense(input_size, 32, learning_rate=lr))
+    model.add(BatchNormalization(learning_rate=lr))
+    model.add(ReLU())
+    model.add(Dropout(0.2))
+    
+    model.add(Dense(32, 1, learning_rate=lr))
+    model.add(Linear())
+    
+    model.set_loss(MeanSquaredError())
+    
+    print('Model Architecture:')
+    print(f'  Input: {input_size} neurons')
+    print(f'  Hidden Layer: 32 neurons + ReLU + Dropout(0.2) + BatchNorm')
+    print(f'  Output: 1 neuron + Linear activation')
+    print(f'Hyperparameters: epochs={epochs}, batch_size={batch_size}, lr={lr}')
+    print('='*60)
+    
+    model.train(X_train, Y_train.reshape(-1, 1), epochs=epochs, batch_size=batch_size)
+    
+    # Evaluate on test set
+    pred_test = model.predict_proba(X_test).flatten()
+    mae_test = np.mean(np.abs(pred_test - Y_test))
+    
+    print(f'Test MAE (normalized): {mae_test:.4f}')
+    print(f'Test MAE (original): {mae_test * (Y.max() - Y.min()):.2f}')
 
 
 if __name__ == '__main__':
-    parser = argparse.ArgumentParser()
-    parser.add_argument('--dataset', default='app/data/soil_moisture_level.csv')
-    parser.add_argument('--seq_length', type=int, default=15)
-    parser.add_argument('--n_classes', type=int, default=5)
-    parser.add_argument('--epochs', type=int, default=100)
-    parser.add_argument('--batch_size', type=int, default=64)
-    parser.add_argument('--learning_rate', type=float, default=0.005)
-    parser.add_argument('--regression', action='store_true')
-    parser.add_argument('--generate', action='store_true')
+    parser = argparse.ArgumentParser(description='Neural Network for Soil Moisture Prediction')
+    parser.add_argument('--dataset', default='app/data/soil_moisture_level.csv', help='Dataset path')
+    parser.add_argument('--epochs', type=int, default=500, help='Number of epochs')
+    parser.add_argument('--batch_size', type=int, default=128, help='Batch size')
+    parser.add_argument('--learning_rate', type=float, default=0.001, help='Learning rate')
+    
     args = parser.parse_args()
-
-    main(dataset_path=args.dataset, use_timeseries=True, generate=args.generate, seq_length=args.seq_length, n_classes=args.n_classes, epochs=args.epochs, batch_size=args.batch_size, lr=args.learning_rate, regression=args.regression)
+    main(dataset_path=args.dataset, epochs=args.epochs, batch_size=args.batch_size, lr=args.learning_rate)
