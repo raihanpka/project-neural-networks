@@ -14,7 +14,7 @@ from app.function.layer import Dense
 from app.function.activations import ReLU, Softmax, Sigmoid, Tanh, Linear
 from app.function.regularization import BatchNormalization, Dropout
 from app.function.check_loss import CategoricalCrossentropy, MeanSquaredError, MeanAbsoluteError
-from app.data.dataset import generate_soil_moisture_dataset
+from app.data.generate_dataset import generate_soil_moisture_dataset
 from app.function.metrics import calculate_accuracy
 
 st.set_page_config(page_title="Group 1 - Neural Network (PBL AI)", layout="wide", page_icon="📊")
@@ -31,13 +31,26 @@ def normalize_data(data, method='minmax'):
     return data
 
 
+def calculate_r2_score(y_true, y_pred):
+    """Hitung R² (coefficient of determination)
+    R² = 1 - (SS_res / SS_tot)
+    Nilai berkisar dari -inf hingga 1.0, dimana 1.0 adalah perfect prediction
+    """
+    ss_res = np.sum((y_true - y_pred) ** 2)  # residual sum of squares
+    ss_tot = np.sum((y_true - np.mean(y_true)) ** 2)  # total sum of squares
+    if ss_tot == 0:
+        return 0.0
+    r2 = 1 - (ss_res / ss_tot)
+    return r2
+
+
 def get_activation_class(name):
     activations = {
-        'ReLU': ReLU,
+        'Linear': Linear,
         'Sigmoid': Sigmoid,
         'Tanh': Tanh,
         'Softmax': Softmax,
-        'Linear': Linear
+        'ReLU': ReLU,
     }
     return activations.get(name, ReLU)
 
@@ -86,7 +99,6 @@ def draw_neural_network(layer_sizes, layer_names=None, activations=None):
             color = layer_colors[layer_idx % len(layer_colors)]
             circle = plt.Circle((x, y), 0.25, color=color, ec='white', linewidth=2, zorder=3)
             ax.add_patch(circle)
-            
             if layer_idx == 0:
                 ax.text(x, y, str(neuron_idx + 1), ha='center', va='center', 
                        fontsize=8, color='white', fontweight='bold', zorder=4)
@@ -110,9 +122,6 @@ def draw_neural_network(layer_sizes, layer_names=None, activations=None):
                 ax.plot([start_pos[0] + 0.2, end_pos[0] - 0.2], 
                        [start_pos[1], end_pos[1]], 
                        color='#cccccc', linewidth=0.7, alpha=0.6, zorder=1)
-    
-    if layer_names is None:
-        layer_names = ['Input'] + [f'Hidden {i+1}' for i in range(n_layers - 2)] + ['Output']
     
     for layer_idx, (name, size) in enumerate(zip(layer_names, layer_sizes)):
         x = layer_idx * h_spacing
@@ -148,44 +157,58 @@ def discretize_target(y, n_bins=5):
     return labels, percentiles
 
 
-DATA_PATH = os.path.join(os.path.dirname(__file__), '../data/soil_moisture.csv')
+DATA_PATH = os.path.join(os.path.dirname(__file__), '../data/soil_moisture_level.csv')
 
 with st.sidebar:
     st.header("Konfigurasi Data")
 
     # Pilih sumber dataset (mutually exclusive)
     data_source = st.radio("Sumber dataset", 
-                           options=["Built-in (CSV)", "Upload CSV", "Synthetic (Generate)"],
-                           index=2)
+                           options=["Built-in Sensor Dataset", "Upload CSV", "Data Sintetis (Generate)"],
+                           index=0)
 
     df = None
 
     # Synthetic dataset options
-    if data_source == "Synthetic (Generate)":
-        st.subheader('Buat dataset sintetis')
+    if data_source == "Data Sintetis (Generate)":
+        st.subheader('Buat Dataset Sintetis')
         synth_rows = st.number_input("Jumlah baris per lokasi (period days)", min_value=30, max_value=2000, value=365)
         synth_locations = st.number_input("Jumlah lokasi sintetis", min_value=1, max_value=100, value=5)
         synth_seed = st.number_input("Seed (random)", min_value=0, max_value=10000, value=42, step=1)
-        if st.button('Generate dataset'):
+        if st.button('Generate Dataset'):
             df = generate_soil_moisture_dataset(n_rows=synth_rows, seed=int(synth_seed),
                                                 save_csv=False, path=DATA_PATH, plot=False,
                                                 add_time=True, n_locations=int(synth_locations), period_days=synth_rows)
             st.session_state['df'] = df
-            st.session_state['feature_cols'] = [c for c in ['latitude','longitude','clay_content','sand_content','silt_content','sm_aux'] if c in df.columns] or [c for c in ['temperature','humidity','rainfall','cloud_cover'] if c in df.columns]
-            st.session_state['target_col'] = 'sm_tgt' if 'sm_tgt' in df.columns else 'soil_moisture'
+            st.session_state['feature_cols'] = [c for c in ['pm1', 'pm2', 'pm3', 'ammonia', 'luminosity', 'temperature', 'humidity', 'pressure'] if c in df.columns] or [c for c in ['temperature','humidity','rainfall','cloud_cover'] if c in df.columns]
+            # default target is 'soil_moisture' for sensor dataset; fallback to last numeric column
+            numeric_cols = [c for c in df.columns if pd.api.types.is_numeric_dtype(df[c])]
+            st.session_state['target_col'] = 'soil_moisture' if 'soil_moisture' in df.columns else (numeric_cols[-1] if numeric_cols else None)
             st.success(f'Dataset sintetis berhasil dibuat: {len(df)} baris ({synth_locations} lokasi)')
 
     # Built-in dataset options
-    elif data_source == "Built-in (CSV)":
-        st.subheader("Dataset Bawaan")
+    elif data_source == "Built-in Sensor Dataset":
+        st.subheader("Dataset Sensor Bawaan")
         if os.path.exists(DATA_PATH):
-            sample_size = st.slider("Jumlah sampel data (sampling)", 1000, 50000, 10000, step=1000,
-                                   help="Dataset asli memiliki 300k+ baris, sampling untuk efisiensi")
-            if st.button("Muat Dataset Bawaan"):
+            if st.button("Muat Dataset Sensor Bawaan"):
                 try:
-                    df_full = pd.read_csv(DATA_PATH)
-                    df = df_full.sample(n=min(sample_size, len(df_full)), random_state=42)
+                    df = pd.read_csv(DATA_PATH)
+                    df.columns = df.columns.str.strip().str.lower().str.replace(' ', '_')
+                    # map ttime to time if present
+                    if 'ttime' in df.columns and 'time' not in df.columns:
+                        df.rename(columns={'ttime': 'time'}, inplace=True)
                     st.session_state['df'] = df
+                    # Determine built-in defaults based on header
+                    cols = set(df.columns.tolist())
+                    if {'pm1', 'pm2', 'pm3', 'ammonia', 'luminosity', 'temperature', 'humidity', 'pressure', 'soil_moisture'}.issubset(cols):
+                        st.session_state['feature_cols'] = [c for c in ['pm1', 'pm2', 'pm3', 'ammonia', 'luminosity', 'temperature', 'humidity', 'pressure'] if c in df.columns]
+                        st.session_state['target_col'] = 'soil_moisture'
+                        st.session_state['builtin_schema'] = 'sensor'
+                    else:
+                        # fallback: pick numeric columns
+                        numeric_cols = [c for c in df.columns if pd.api.types.is_numeric_dtype(df[c])]
+                        st.session_state['feature_cols'] = numeric_cols[:-1]
+                        st.session_state['target_col'] = numeric_cols[-1] if numeric_cols else None
                     st.success(f"Dataset dimuat: {len(df)} sampel")
                 except Exception as e:
                     st.error(f"Gagal memuat dataset bawaan: {e}")
@@ -216,27 +239,33 @@ with st.sidebar:
         st.subheader("Pilih Kolom")
         numeric_columns = df.select_dtypes(include=[np.number]).columns.tolist()
 
-        default_features = ['latitude', 'longitude', 'clay_content', 'sand_content',
-                            'silt_content', 'sm_aux']
+        default_features = ['pm1', 'pm2', 'pm3', 'ammonia', 'luminosity', 'temperature', 'humidity', 'pressure']
         default_features = [f for f in default_features if f in numeric_columns]
 
         feature_cols = st.multiselect(
             "Kolom Fitur (X)",
             options=numeric_columns,
-            default=default_features if default_features else (numeric_columns[:-1] if len(numeric_columns) > 1 else numeric_columns)
+            default=default_features if default_features else (numeric_columns[:-1] if len(numeric_columns) > 1 else numeric_columns),
+            disabled=(data_source == "Built-in Sensor Dataset")
         )
 
-        default_target = 'sm_tgt' if 'sm_tgt' in numeric_columns else (numeric_columns[-1] if numeric_columns else None)
+        default_target = 'soil_moisture' if 'soil_moisture' in numeric_columns else (numeric_columns[-1] if numeric_columns else None)
         target_col = None
         if numeric_columns:
             target_col = st.selectbox(
                 "Kolom Target (Y)",
                 options=numeric_columns,
-                index=numeric_columns.index(default_target) if default_target in numeric_columns else 0
+                index=numeric_columns.index(default_target) if default_target in numeric_columns else 0,
+                disabled=(data_source == "Built-in Sensor Dataset")
             )
 
         n_classes = st.slider("Jumlah kelas (diskritisasi target)", 3, 10, 5,
                              help="Target kontinyu akan di-bin menjadi n kelas")
+        
+        if data_source == "Built-in Sensor Dataset":
+            # Keep existing session values if present, otherwise set defaults
+            st.session_state['regression_mode'] = st.session_state.get('regression_mode', True)
+            st.session_state['soil_moisture_scale'] = st.session_state.get('soil_moisture_scale', 1000.0)
 
         st.subheader("Preprocessing")
         normalize_method = st.selectbox(
@@ -255,6 +284,7 @@ with st.sidebar:
         st.session_state['target_col'] = target_col
         st.session_state['normalize_method'] = normalize_method
         st.session_state['n_classes'] = n_classes
+        st.session_state['data_source'] = data_source
 
 tab1, tab2, tab3, tab4 = st.tabs(["Dataset", "Arsitektur", "Training", "Hasil"])
 
@@ -272,20 +302,23 @@ with tab1:
         with col3:
             st.metric("Missing Values", df.isnull().sum().sum())
         with col4:
-            if 'sm_tgt' in df.columns:
-                st.metric("Rata-rata SM", f"{df['sm_tgt'].mean():.3f}")
+            # show average of the detected target column if available
+            t_col = st.session_state.get('target_col', None)
+            if t_col and t_col in df.columns:
+                try:
+                    st.metric("Rata-rata SM", f"{df[t_col].mean():.3f}")
+                except Exception:
+                    pass
         
-        st.subheader("Deskripsi Dataset")
-        st.markdown("""
-        Dataset ini berisi observasi remote sensing kelembaban tanah untuk tahun 2013 di wilayah Jerman:
-        - **time**: Timestamp observasi
-        - **latitude/longitude**: Koordinat lokasi
-        - **clay_content**: Persentase kandungan tanite
-        - **sand_content**: Persentase kandungan pasir
-        - **silt_content**: Persentase kandungan lanau
-        - **sm_aux**: Kelembaban tanah dari satelit SMOS-ASCAT (smoothed)
-        - **sm_tgt**: Kelembaban tanah dari satelit AMSR (target prediksi)
-        """)
+        if data_source == "Built-in Sensor Dataset":
+            st.subheader("Deskripsi Dataset")
+            if 'df' in st.session_state:
+                df_info = st.session_state['df']
+                # Show default feature/target choice if set
+                fc = st.session_state.get('feature_cols', [])
+                tc = st.session_state.get('target_col', None)
+                st.markdown(f"**Default Fitur:** {', '.join(fc)}")
+                st.markdown(f"**Default Target:** {tc}")
         
         st.subheader("Sample Data")
         st.dataframe(df.head(15), width='stretch')
@@ -295,35 +328,59 @@ with tab1:
         
         st.subheader("Visualisasi Data")
         
-        col1, col2 = st.columns(2)
+        col1 = st.columns(1)[0]
         
         with col1:
-            if 'sm_aux' in df.columns and 'sm_tgt' in df.columns:
-                fig, ax = plt.subplots(figsize=(8, 6))
-                scatter = ax.scatter(df['sm_aux'], df['sm_tgt'], 
-                                    c=df['sm_tgt'], cmap='YlGnBu', 
-                                    alpha=0.5, s=10)
-                ax.set_xlabel('SM Auxiliary (SMOS-ASCAT)')
-                ax.set_ylabel('SM Target (AMSR)')
-                ax.set_title('Perbandingan Soil Moisture: SMOS vs AMSR')
-                plt.colorbar(scatter, ax=ax, label='SM Target')
-                ax.plot([0, 0.6], [0, 0.6], 'r--', alpha=0.7, label='Perfect fit')
-                ax.legend()
-                ax.grid(True, alpha=0.3)
-                st.pyplot(fig)
-        
-        with col2:
-            if 'latitude' in df.columns and 'longitude' in df.columns and 'sm_tgt' in df.columns:
-                fig, ax = plt.subplots(figsize=(8, 6))
-                scatter = ax.scatter(df['longitude'], df['latitude'], 
-                                    c=df['sm_tgt'], cmap='Blues', 
-                                    alpha=0.6, s=15)
-                ax.set_xlabel('Longitude')
-                ax.set_ylabel('Latitude')
-                ax.set_title('Distribusi Spasial Kelembaban Tanah')
-                plt.colorbar(scatter, ax=ax, label='Soil Moisture')
-                ax.grid(True, alpha=0.3)
-                st.pyplot(fig)
+            # Sensor-specific visualization: choose a sensor feature to compare with soil_moisture
+            if 'soil_moisture' in df.columns:
+                # Prefer pm1 if present, else luminosity, else temperature
+                if 'pm1' in df.columns:
+                    feature_x = 'pm1'
+                    xlabel = 'PM1'
+                elif 'luminosity' in df.columns:
+                    feature_x = 'luminosity'
+                    xlabel = 'Luminosity'
+                elif 'temperature' in df.columns:
+                    feature_x = 'temperature'
+                    xlabel = 'Temperature'
+                else:
+                    feature_x = None
+
+                if feature_x is not None and 'soil_moisture' in df.columns:
+                    fig, axes = plt.subplots(1, 3, figsize=(15, 4))
+
+                    # Plot 1: PM1 vs Soil Moisture
+                    s1 = axes[0].scatter(df[feature_x], df['soil_moisture'],
+                                        c=df['soil_moisture'], cmap='YlOrBr',
+                                        alpha=0.5, s=10)
+                    axes[0].set_xlabel(xlabel)
+                    axes[0].set_ylabel('Soil Moisture')
+                    axes[0].set_title(f'{xlabel} vs Soil Moisture')
+                    plt.colorbar(s1, ax=axes[0], label='Soil Moisture')
+                    axes[0].grid(True, alpha=0.3)
+
+                    # Plot 2: Luminosity vs Soil Moisture
+                    s2 = axes[1].scatter(df['luminosity'], df['soil_moisture'],
+                                        c=df['soil_moisture'], cmap='YlOrBr',
+                                        alpha=0.5, s=10)
+                    axes[1].set_xlabel('Luminosity')
+                    axes[1].set_ylabel('Soil Moisture')
+                    axes[1].set_title('Luminosity vs Soil Moisture')
+                    plt.colorbar(s2, ax=axes[1], label='Soil Moisture')
+                    axes[1].grid(True, alpha=0.3)
+
+                    # Plot 3: Temperature vs Soil Moisture
+                    s3 = axes[2].scatter(df['temperature'], df['soil_moisture'],
+                                        c=df['soil_moisture'], cmap='coolwarm',
+                                        alpha=0.5, s=10)
+                    axes[2].set_xlabel('Temperature')
+                    axes[2].set_ylabel('Soil Moisture')
+                    axes[2].set_title('Temperature vs Soil Moisture')
+                    plt.colorbar(s3, ax=axes[2], label='Soil Moisture')
+                    axes[2].grid(True, alpha=0.3)
+
+                    plt.tight_layout()
+                    st.pyplot(fig)
         
         feature_cols = st.session_state.get('feature_cols', [])
         if len(feature_cols) > 0:
@@ -355,8 +412,7 @@ with tab2:
     st.markdown("""
     Library yang digunakan untuk membangun model: 
     - Numpy
-    - Matplotlib
-    - Networkx (untuk visualisasi)
+    - Matplotlib & NetworkX (untuk visualisasi)
     """)
     
     col1, col2 = st.columns([1, 1])
@@ -376,18 +432,24 @@ with tab2:
             with col_a:
                 neurons = st.number_input(
                     f"Neurons",
-                    min_value=4, max_value=256, value=64 if i == 0 else 32,
+                    min_value=4, max_value=512, value=64 if i == 0 else 32,
                     key=f"neurons_{i}"
                 )
                 activation = st.selectbox(
                     f"Aktivasi",
-                    options=['ReLU', 'Sigmoid', 'Tanh', 'Linear'],
+                    options=['Linear', 'Sigmoid', 'Tanh', 'Softmax', 'ReLU'],
+                    index=4,
                     key=f"activation_{i}"
                 )
             
             with col_b:
                 use_batchnorm = st.checkbox(f"Batch Normalization", value=True, key=f"bn_{i}")
-                dropout_rate = st.slider(f"Dropout", 0.0, 0.5, 0.1, step=0.05, key=f"dropout_{i}")
+                dropout_rate = st.number_input(
+                    f"Dropout Rate",
+                    min_value=0.0, max_value=0.9, value=0.5,
+                    step=0.05,
+                    key=f"dropout_{i}"
+                )
             
             layer_config.append({
                 'neurons': neurons,
@@ -398,14 +460,11 @@ with tab2:
             activations_list.append(activation)
         
         st.markdown("**Output Layer**")
-        if st.session_state.get('regression_mode', False):
-            output_activation = 'Linear'
-            st.write('Output Activation: **Linear** (regression mode)')
-        else:
-            output_activation = st.selectbox(
-                "Aktivasi Output",
-                options=['ReLU', 'Softmax', 'Sigmoid', 'Linear'],
-            )
+        output_activation = st.selectbox(
+            "Aktivasi Output",
+            options=['Linear', 'Sigmoid', 'Tanh', 'Softmax', 'ReLU'],
+            index=0,
+        )
         activations_list.append(output_activation)
         
         st.session_state['layer_config'] = layer_config
@@ -416,10 +475,17 @@ with tab2:
         
         if 'df' in st.session_state and st.session_state.get('feature_cols'):
             input_size = len(st.session_state['feature_cols'])
-            output_size = st.session_state.get('n_classes', 5)
         else:
             input_size = 6
-            output_size = 5
+        
+        # Determine output size based on regression mode
+        regression_mode = st.session_state.get('regression_mode', False)
+        if regression_mode:
+            output_size = 1
+            output_label = "1 output (Regresi)"
+        else:
+            output_size = st.session_state.get('n_classes', 5)
+            output_label = f"{output_size} kelas (Klasifikasi)"
         
         layer_sizes = [input_size] + [l['neurons'] for l in layer_config] + [output_size]
         layer_names = ['Input'] + [f'Hidden {i+1}' for i in range(len(layer_config))] + ['Output']
@@ -438,7 +504,7 @@ with tab2:
         
         st.markdown(f"- Total parameters: **{total_params:,}**")
         st.markdown(f"- Input: **{input_size}** fitur")
-        st.markdown(f"- Output: **{output_size}** kelas")
+        st.markdown(f"- Output: **{output_label}**")
 
 with tab3:
     st.header("Parameter Training")
@@ -448,14 +514,15 @@ with tab3:
     with col1:
         st.subheader("Hyperparameters")
         
-        epochs = st.number_input("Epochs", min_value=10, max_value=5000, value=200, step=10)
-        batch_size = st.number_input("Batch Size", min_value=8, max_value=512, value=64)
+        epochs = st.number_input("Epochs", min_value=10, max_value=1000000, value=200, step=10)
+        batch_size = st.number_input("Batch Size", min_value=8, max_value=1024, value=64)
         learning_rate = st.number_input("Learning Rate", min_value=0.0001, max_value=0.1, 
                                         value=0.005, format="%.4f")
         
         loss_function = st.selectbox(
             "Loss Function",
-            options=['Mean Squared Error', 'Categorical Crossentropy', 'Mean Absolute Error']
+            options=['Mean Squared Error', 'Categorical Crossentropy', 'Mean Absolute Error'],
+            index=0
         )
         
         regularization_l2 = 0.0001
@@ -489,11 +556,32 @@ with tab3:
             normalize_method = st.session_state.get('normalize_method', 'minmax')
             n_classes = st.session_state.get('n_classes', 5)
             
+            # if built-in dataset, apply minor preprocessing toggles
+            if st.session_state.get('data_source', None) == 'Built-in Sensor Dataset':
+                # Make a copy to avoid mutating session data unintentionally
+                _df_train = df.copy()
+                # Save original target values for metrics (pre-normalization)
+                if target_col in _df_train.columns:
+                    st.session_state['target_original_values'] = _df_train[target_col].values.astype(np.float32)
+                # (texture scaling removed; only sensor dataset supported)
+                # If sensor schema: scale soil_moisture
+                if st.session_state.get('builtin_schema', None) == 'sensor' and 'soil_moisture' in _df_train.columns:
+                    divisor = float(st.session_state.get('soil_moisture_scale', 1.0))
+                    if divisor != 1.0:
+                        _df_train['soil_moisture'] = _df_train['soil_moisture'] / divisor
+                # Replace df for a training run
+                df = _df_train
+            
             X = df[feature_cols].values.astype(np.float32)
             X = np.nan_to_num(X, nan=0.0)
             X = normalize_data(X, normalize_method)
             
             regression_mode = st.session_state.get('regression_mode', False)
+            # Keep a copy of original targets (pre-trained normalization) - already saved above for built-in
+            if 'target_original_values' in st.session_state:
+                y_original = st.session_state['target_original_values']
+            else:
+                y_original = df[target_col].values.astype(np.float32)
             y_raw = df[target_col].values.astype(np.float32)
             if regression_mode:
                 y_min = float(y_raw.min())
@@ -508,9 +596,12 @@ with tab3:
                 st.session_state['bin_edges'] = bin_edges
             
             input_size = X.shape[1]
-            actual_classes = len(np.unique(Y)) if not regression_mode else 1
+            if regression_mode:
+                output_neurons = 1
+            else:
+                output_neurons = len(np.unique(Y))
             
-            st.info(f"Training: {len(X)} sampel, {input_size} fitur, {actual_classes} kelas")
+            st.info(f"Training: {len(X)} sampel, {input_size} fitur, {'1 output' if regression_mode else f'{output_neurons} kelas'}")
             
             model = NeuralNetwork()
             layer_config = st.session_state['layer_config']
@@ -526,7 +617,7 @@ with tab3:
                     model.add(Dropout(layer_cfg['dropout']))
                 prev_neurons = layer_cfg['neurons']
             
-            model.add(Dense(prev_neurons, actual_classes, learning_rate=learning_rate))
+            model.add(Dense(prev_neurons, output_neurons, learning_rate=learning_rate))
             model.add(get_activation_class(st.session_state['output_activation'])())
             
             LossClass = get_loss_class(loss_function)
@@ -538,14 +629,27 @@ with tab3:
             progress_bar = st.progress(0)
             status_text = st.empty()
             
-            col_chart1, col_chart2 = st.columns(2)
-            with col_chart1:
-                loss_placeholder = st.empty()
-            with col_chart2:
-                acc_placeholder = st.empty()
+            # Untuk regression: 3 charts (Loss, MAE, R²), untuk classification: 2 charts (Loss, Accuracy)
+            regression_mode = st.session_state.get('regression_mode', False)
+            if regression_mode:
+                col_chart1, col_chart2, col_chart3 = st.columns(3)
+                with col_chart1:
+                    loss_placeholder = st.empty()
+                with col_chart2:
+                    mae_placeholder = st.empty()
+                with col_chart3:
+                    r2_placeholder = st.empty()
+            else:
+                col_chart1, col_chart2 = st.columns(2)
+                with col_chart1:
+                    loss_placeholder = st.empty()
+                with col_chart2:
+                    acc_placeholder = st.empty()
             
             losses = []
             accuracies = []
+            r2_scores = []  # Untuk menyimpan R² selama training
+            mae_scores = []  # Untuk menyimpan MAE selama training
             
             n_batches = max(len(X) // batch_size, 1)
             
@@ -581,27 +685,45 @@ with tab3:
                         denom = y_max - y_min if (y_max - y_min) != 0 else 1.0
                         preds_orig = preds * denom + y_min
                         y_original = y_raw
-                        accuracy = np.mean(np.abs(preds_orig - y_original))
+                        mae = np.mean(np.abs(preds_orig - y_original))
+                        r2 = calculate_r2_score(y_original, preds_orig)
+                        accuracy = mae  # Gunakan MAE sebagai accuracy metric
+                        accuracies.append(accuracy)
+                        mae_scores.append(mae)
+                        r2_scores.append(r2)
                     else:
                         accuracy = calculate_accuracy(Y, val_output)
-                    accuracies.append(accuracy)
+                        accuracies.append(accuracy)
                     
                     progress = (epoch + 1) / epochs
                     progress_bar.progress(progress)
                     if regression_mode:
-                        status_text.text(f"Epoch {epoch+1}/{epochs} - Loss: {avg_loss:.6f} - MAE: {accuracy:.4f}")
+                        status_text.markdown(f"Epoch {epoch+1}/{epochs} - 🔴 **Loss**: {avg_loss:.6f} - 🟠 **MAE**: {mae:.4f} - 🟣 **R²**: {r2:.4f}")
                     else:
-                        status_text.text(f"Epoch {epoch+1}/{epochs} - Loss: {avg_loss:.6f} - Accuracy: {accuracy:.4f}")
+                        status_text.markdown(f"Epoch {epoch+1}/{epochs} - 🔴 **Loss**: {avg_loss:.6f} - 🟣 **Accuracy**: {accuracy:.4f}")
                     
-                    loss_df = pd.DataFrame({'Epoch': range(len(losses)), 'Loss': losses})
-                    loss_placeholder.line_chart(loss_df.set_index('Epoch'))
-                    
+                    # Plot Loss dengan warna merah
+                    loss_df = pd.DataFrame({'Loss': losses})
+                    loss_placeholder.line_chart(loss_df, color='#E74C3C')
+
                     # Ensure we have the same number of epochs as accuracy values
                     acc_epochs = list(range(0, len(losses)))[:len(accuracies)]
-                    # Trim accuracies to match the length of acc_epochs if needed
-                    accuracies = accuracies[:len(acc_epochs)]
-                    acc_df = pd.DataFrame({'Epoch': acc_epochs, 'Accuracy': accuracies})
-                    acc_placeholder.line_chart(acc_df.set_index('Epoch'))
+                    
+                    if regression_mode:
+                        # Untuk regression, tampilkan MAE dengan warna orange
+                        mae_plot = mae_scores[:len(acc_epochs)]
+                        mae_df = pd.DataFrame({'MAE': mae_plot})
+                        mae_placeholder.line_chart(mae_df, color='#FF9500')
+                        
+                        # Untuk regression, tampilkan R² dengan warna ungu
+                        r2_plot = r2_scores[:len(acc_epochs)]
+                        r2_df = pd.DataFrame({'R²': r2_plot})
+                        r2_placeholder.line_chart(r2_df, color='#9B59B6')
+                    else:
+                        # Untuk classification, tampilkan Accuracy dengan warna hijau
+                        accuracies_trimmed = accuracies[:len(acc_epochs)]
+                        acc_df = pd.DataFrame({'Accuracy': accuracies_trimmed})
+                        acc_placeholder.line_chart(acc_df, color='#27AE60')
             
             progress_bar.progress(1.0)
             
@@ -614,19 +736,28 @@ with tab3:
                 denom = y_max - y_min if (y_max - y_min) != 0 else 1.0
                 preds_original = preds * denom + y_min
                 y_original = y_raw
-                final_accuracy = np.mean(np.abs(preds_original - y_original))
+                final_mae = np.mean(np.abs(preds_original - y_original))
+                final_r2 = calculate_r2_score(y_original, preds_original)
+                final_accuracy = final_mae  # simpan MAE untuk compatibility
             else:
                 final_accuracy = calculate_accuracy(Y, final_output)
+                final_r2 = None
             
             st.session_state['model'] = model
             st.session_state['losses'] = losses
             st.session_state['accuracies'] = accuracies
             st.session_state['final_accuracy'] = final_accuracy
+            st.session_state['final_r2'] = final_r2
+            st.session_state['r2_scores'] = r2_scores if regression_mode else []
             st.session_state['X'] = X
             st.session_state['Y'] = Y
-            st.session_state['y_raw'] = y_raw
+            # Save original target values for downstream plotting/metrics
+            st.session_state['y_raw'] = y_original
             
-            st.success(f"Training selesai! Final Accuracy: {final_accuracy:.4f}")
+            if regression_mode:
+                st.success(f"Training selesai! Final MAE: {final_mae:.4f} dengan Accuracy (R²): {final_r2:.4f}")
+            else:
+                st.success(f"Training selesai! Final Accuracy: {final_accuracy:.4f}")
 
 with tab4:
     st.header("Hasil Training dan Prediksi")
@@ -640,38 +771,78 @@ with tab4:
             else:
                 st.metric("Final Accuracy", f"{st.session_state['final_accuracy']:.4f}")
         with col2:
-            st.metric("Final Loss", f"{st.session_state['losses'][-1]:.6f}")
+            if st.session_state.get('regression_mode', False) and st.session_state.get('final_r2') is not None:
+                st.metric("Accuracy (R² Score)", f"{st.session_state['final_r2']:.4f}")
+            else:
+                st.metric("Final Loss", f"{st.session_state['losses'][-1]:.6f}")
         with col3:
             st.metric("Total Epochs", len(st.session_state['losses']))
         
         st.subheader("Training History")
         
-        fig, axes = plt.subplots(1, 2, figsize=(14, 5))
+        regression_mode = st.session_state.get('regression_mode', False)
         
-        ax1 = axes[0]
-        ax1.plot(st.session_state['losses'], color='#E74C3C', linewidth=1.5)
-        ax1.fill_between(range(len(st.session_state['losses'])), 
-                        st.session_state['losses'], alpha=0.3, color='#E74C3C')
-        ax1.set_xlabel('Epoch', fontsize=11)
-        ax1.set_ylabel('Loss', fontsize=11)
-        ax1.set_title('Training Loss', fontsize=13, fontweight='bold')
-        ax1.grid(True, alpha=0.3)
-        ax1.spines['top'].set_visible(False)
-        ax1.spines['right'].set_visible(False)
-        
-        ax2 = axes[1]
-        # Ensure we have matching lengths for plotting
-        acc_epochs = list(range(0, len(st.session_state['losses'])))[:len(st.session_state['accuracies'])]
-        accuracies = st.session_state['accuracies'][:len(acc_epochs)]
-        ax2.plot(acc_epochs, accuracies, color='#27AE60', 
-                marker='o', linewidth=1.5, markersize=4)
-        ax2.fill_between(acc_epochs, accuracies, alpha=0.3, color='#27AE60')
-        ax2.set_xlabel('Epoch', fontsize=11)
-        ax2.set_ylabel('Accuracy', fontsize=11)
-        ax2.set_title('Training Accuracy', fontsize=13, fontweight='bold')
-        ax2.grid(True, alpha=0.3)
-        ax2.spines['top'].set_visible(False)
-        ax2.spines['right'].set_visible(False)
+        if regression_mode:
+            # Untuk regression: Loss dan R² Score
+            fig, axes = plt.subplots(1, 2, figsize=(14, 5))
+            
+            ax1 = axes[0]
+            ax1.plot(st.session_state['losses'], color='#E74C3C', linewidth=1.5)
+            ax1.fill_between(range(len(st.session_state['losses'])), 
+                            st.session_state['losses'], alpha=0.3, color='#E74C3C')
+            ax1.set_xlabel('Epoch', fontsize=11)
+            ax1.set_ylabel('Loss', fontsize=11)
+            ax1.set_title('Training Loss', fontsize=13, fontweight='bold')
+            ax1.grid(True, alpha=0.3)
+            ax1.spines['top'].set_visible(False)
+            ax1.spines['right'].set_visible(False)
+            
+            ax2 = axes[1]
+            # Ensure we have matching lengths for plotting
+            acc_epochs = list(range(0, len(st.session_state['losses'])))[:len(st.session_state['accuracies'])]
+            r2_scores = st.session_state.get('r2_scores', [])[:len(acc_epochs)]
+            
+            if r2_scores:
+                ax2.plot(acc_epochs, r2_scores, color='#9B59B6', 
+                        marker='o', linewidth=2, markersize=5)
+                ax2.fill_between(acc_epochs, r2_scores, alpha=0.3, color='#9B59B6')
+                ax2.axhline(y=1.0, color='green', linestyle='--', alpha=0.5, linewidth=2, label='Perfect (R²=1.0)')
+                ax2.set_xlabel('Epoch', fontsize=11)
+                ax2.set_ylabel('Accuracy (R² Score)', fontsize=11)
+                ax2.set_title('Accuracy - R² Growth', fontsize=13, fontweight='bold')
+                ax2.set_ylim([-0.1, 1.1])
+                ax2.legend(loc='lower right')
+            
+            ax2.grid(True, alpha=0.3)
+            ax2.spines['top'].set_visible(False)
+            ax2.spines['right'].set_visible(False)
+        else:
+            # Untuk classification: Loss dan Accuracy
+            fig, axes = plt.subplots(1, 2, figsize=(14, 5))
+            
+            ax1 = axes[0]
+            ax1.plot(st.session_state['losses'], color='#E74C3C', linewidth=1.5)
+            ax1.fill_between(range(len(st.session_state['losses'])), 
+                            st.session_state['losses'], alpha=0.3, color='#E74C3C')
+            ax1.set_xlabel('Epoch', fontsize=11)
+            ax1.set_ylabel('Loss', fontsize=11)
+            ax1.set_title('Training Loss', fontsize=13, fontweight='bold')
+            ax1.grid(True, alpha=0.3)
+            ax1.spines['top'].set_visible(False)
+            ax1.spines['right'].set_visible(False)
+            
+            ax2 = axes[1]
+            acc_epochs = list(range(0, len(st.session_state['losses'])))[:len(st.session_state['accuracies'])]
+            accuracies = st.session_state['accuracies'][:len(acc_epochs)]
+            ax2.plot(acc_epochs, accuracies, color='#27AE60', 
+                    marker='o', linewidth=1.5, markersize=4)
+            ax2.fill_between(acc_epochs, accuracies, alpha=0.3, color='#27AE60')
+            ax2.set_xlabel('Epoch', fontsize=11)
+            ax2.set_ylabel('Accuracy', fontsize=11)
+            ax2.set_title('Training Accuracy', fontsize=13, fontweight='bold')
+            ax2.grid(True, alpha=0.3)
+            ax2.spines['top'].set_visible(False)
+            ax2.spines['right'].set_visible(False)
         
         plt.tight_layout()
         st.pyplot(fig)
@@ -704,7 +875,7 @@ with tab4:
                 ax.scatter(range(len(preds_orig)), preds_orig, label='Predicted', alpha=0.5, s=10)
                 ax.set_xlabel('Sample Index')
                 ax.set_ylabel('Soil Moisture')
-                ax.set_title('True vs Predicted (Regression)')
+                ax.set_title('True vs Predicted')
                 ax.legend()
                 ax.grid(True, alpha=0.3)
             else:
@@ -741,7 +912,7 @@ with tab4:
                     y_raw = st.session_state['y_raw']
                     ax.scatter(range(len(y_raw)), y_raw, c=correct, cmap='RdYlGn', alpha=0.5, s=10)
                     ax.set_xlabel('Sample Index')
-                    ax.set_ylabel('Soil Moisture (sm_tgt)')
+                    ax.set_ylabel('Soil Moisture')
                     ax.set_title('Prediksi per Sampel (Hijau=Benar, Merah=Salah)')
                     ax.grid(True, alpha=0.3)
                     st.pyplot(fig)

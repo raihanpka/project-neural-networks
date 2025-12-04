@@ -3,7 +3,7 @@ import pandas as pd
 import matplotlib.pyplot as plt
 
 def generate_soil_moisture_dataset(n_rows=1000, seed: int = 0, save_csv: bool = False,
-                                   path: str = 'app/data/soil_moisture_generated.csv', plot: bool = False,
+                                   path: str = 'app/data/soil_moisture_synthetic.csv', plot: bool = False,
                                    use_space_headers: bool = False,
                                    add_time: bool = False,
                                    n_locations: int = 1,
@@ -82,63 +82,80 @@ def generate_soil_moisture_dataset(n_rows=1000, seed: int = 0, save_csv: bool = 
     soil_norm = np.clip(soil_norm, 0.0, 1.0)
     soil_moisture = np.round(soil_norm * 100, 1)
 
+    # # Add sensor-style columns to the base tabular generator
+    # pm1 = np.clip(10 + (100 - humidity) * 0.25 + np.random.normal(0.0, 5.0, n_rows), 0, None).round(1)
+    # pm2 = np.clip(pm1 * (0.9 + np.random.normal(0.0, 0.05, n_rows)), 0, None).round(1)
+    # pm3 = np.clip(pm1 * (0.8 + np.random.normal(0.0, 0.06, n_rows)), 0, None).round(1)
+    # ammonia = np.clip(np.random.normal(0.5, 0.2, n_rows), 0, None).round(2)
+    # luminosity = np.clip((1 - (cloud_cover / 100.0)) * 1000 + np.random.normal(0.0, 50.0, n_rows), 0, None).round(1)
+    # pressure = np.clip(np.random.normal(1013.0, 8.0, n_rows), 950.0, 1050.0).round(1)
+
     df = pd.DataFrame({
         'temperature': temperature,
         'humidity': humidity,
         'rainfall': rainfall,
         'cloud_cover': cloud_cover,
+        # 'pm1': pm1,
+        # 'pm2': pm2,
+        # 'pm3': pm3,
+        # 'ammonia': ammonia,
+        # 'luminosity': luminosity,
+        # 'pressure': pressure,
         'soil_moisture': soil_moisture
     })
     if use_space_headers:
         df.columns = ['temperature', 'humidity', 'rainfall', 'cloud cover', 'soil moisture']
 
-    # Jika add_time, perluas ke beberapa lokasi dan buat deret waktu
+    # Jika add_time, buat deret waktu
     if add_time:
-        # Bangun panjang deret waktu per lokasi (period_days), replikasi per lokasi
+        # Bangun panjang deret waktu (period_days)
         rows_per_location = max(1, period_days)
-        total_rows = rows_per_location * n_locations
-        # Hasilkan koordinat lokasi dan properti tekstur tanah
-        latitudes = np.random.uniform(48.0, 55.0, n_locations)
-        longitudes = np.random.uniform(6.0, 13.0, n_locations)
-        # Fraksi tanah acak (jumlah 100)
-        clay = np.random.uniform(2.0, 50.0, n_locations).round(1)
-        sand = np.random.uniform(10.0, 90.0, n_locations).round(1)
-        silt = np.clip(100.0 - (clay + sand), 0.0, 100.0).round(1)
 
         # Buat rentang waktu
         date_range = pd.date_range(start=start_date, periods=rows_per_location, freq=freq)
 
-        rows = []
-        for li in range(n_locations):
-            # Sedikit modifikasi array dasar untuk tiap lokasi untuk mensimulasikan lokalitas
-            temp_loc = np.clip(temperature[:rows_per_location] + np.random.normal(0.0, 2.0, rows_per_location), 5.0, 45.0).round(1)
-            hum_loc = np.clip(humidity[:rows_per_location] + np.random.normal(0.0, 4.0, rows_per_location), 5.0, 100.0).round(1)
-            rain_loc = np.clip(rainfall[:rows_per_location] + np.random.normal(0.0, 1.0, rows_per_location), 0.0, None).round(1)
-            cloud_loc = np.clip(cloud_cover[:rows_per_location] + np.random.normal(0.0, 10.0, rows_per_location), 0.0, 100.0).round(1)
-            
-            # Hitung ulang kelembaban tanah per lokasi
-            r_max_local = max(rain_loc.max(), 1.0)
-            r_norm_loc = (rain_loc - r_min) / (r_max_local - r_min) if r_max_local != r_min else np.zeros_like(rain_loc)
-            t_norm_loc = (temp_loc - t_min) / (t_max - t_min)
-            h_norm_loc = (hum_loc - h_min) / (h_max - h_min)
-            c_norm_loc = (cloud_loc - c_min) / (c_max - c_min)
-            soil_norm_loc = 0.12 + (0.55 * r_norm_loc) + (0.20 * h_norm_loc) - (0.15 * t_norm_loc) + (0.05 * c_norm_loc)
-            soil_norm_loc += np.random.normal(0.0, 0.03, size=rows_per_location)
-            soil_norm_loc = np.clip(soil_norm_loc, 0.0, 1.0)
-            soil_moisture_loc = np.round(soil_norm_loc * 100, 1)
+        # Gunakan data dasar untuk rentang yang dibutuhkan
+        temp_ts = np.clip(temperature[:rows_per_location] + np.random.normal(0.0, 2.0, rows_per_location), 5.0, 45.0).round(1)
+        hum_ts = np.clip(humidity[:rows_per_location] + np.random.normal(0.0, 4.0, rows_per_location), 5.0, 100.0).round(1)
+        rain_ts = np.clip(rainfall[:rows_per_location] + np.random.normal(0.0, 1.0, rows_per_location), 0.0, None).round(1)
+        cloud_ts = np.clip(cloud_cover[:rows_per_location] + np.random.normal(0.0, 10.0, rows_per_location), 0.0, 100.0).round(1)
+        
+        # Hitung ulang kelembaban tanah
+        r_max_ts = max(rain_ts.max(), 1.0)
+        r_norm_ts = (rain_ts - r_min) / (r_max_ts - r_min) if r_max_ts != r_min else np.zeros_like(rain_ts)
+        t_norm_ts = (temp_ts - t_min) / (t_max - t_min)
+        h_norm_ts = (hum_ts - h_min) / (h_max - h_min)
+        c_norm_ts = (cloud_ts - c_min) / (c_max - c_min)
+        soil_norm_ts = 0.12 + (0.55 * r_norm_ts) + (0.20 * h_norm_ts) - (0.15 * t_norm_ts) + (0.05 * c_norm_ts)
+        soil_norm_ts += np.random.normal(0.0, 0.03, size=rows_per_location)
+        soil_norm_ts = np.clip(soil_norm_ts, 0.0, 1.0)
+        soil_moisture_ts = np.round(soil_norm_ts * 100, 1)
 
-            for i in range(rows_per_location):
-                row = {
-                    'time': date_range[i],
-                    'latitude': latitudes[li],
-                    'longitude': longitudes[li],
-                    'clay_content': clay[li],
-                    'sand_content': sand[li],
-                    'silt_content': silt[li],
-                    'sm_aux': max(0.0, soil_moisture_loc[i] + np.random.normal(0.0, 2.0)),
-                    'sm_tgt': soil_moisture_loc[i]
-                }
-                rows.append(row)
+        # Sensor readings: create pm1/pm2/pm3/ammonia/luminosity/pressure per-time
+        pm1_ts = np.clip(10 + (100 - hum_ts) * 0.25 + np.random.normal(0.0, 5.0, rows_per_location), 0, None).round(1)
+        pm2_ts = np.clip(pm1_ts * (0.9 + np.random.normal(0.0, 0.05, rows_per_location)), 0, None).round(1)
+        pm3_ts = np.clip(pm1_ts * (0.8 + np.random.normal(0.0, 0.06, rows_per_location)), 0, None).round(1)
+        ammonia_ts = np.clip(np.random.normal(0.5, 0.2, rows_per_location), 0, None).round(2)
+        luminosity_ts = np.clip((1 - (cloud_ts / 100.0)) * 1000 + np.random.normal(0.0, 50.0, rows_per_location), 0, None).round(1)
+        pressure_ts = np.clip(np.random.normal(1013.0, 8.0, rows_per_location), 950.0, 1050.0).round(1)
+        
+        rows = []
+        for i in range(rows_per_location):
+            row = {
+                'time': date_range[i],
+                'pm1': float(pm1_ts[i]),
+                'pm2': float(pm2_ts[i]),
+                'pm3': float(pm3_ts[i]),
+                'ammonia': float(ammonia_ts[i]),
+                'luminosity': float(luminosity_ts[i]),
+                'pressure': float(pressure_ts[i]),
+                'temperature': float(temp_ts[i]),
+                'humidity': float(hum_ts[i]),
+                'rainfall': float(rain_ts[i]),
+                'cloud_cover': float(cloud_ts[i]),
+                'soil_moisture': float(soil_moisture_ts[i])
+            }
+            rows.append(row)
 
         timeseries_df = pd.DataFrame(rows)
         df_ts = timeseries_df
@@ -152,7 +169,7 @@ def generate_soil_moisture_dataset(n_rows=1000, seed: int = 0, save_csv: bool = 
     return df
 
 
-def create_data(samples=100, plot=True, save_csv=False, path='app/data/soil_moisture_generated.csv'):
+def create_data(samples=100, plot=True, save_csv=False, path='app/data/soil_moisture_synthetic.csv'):
     """Compatibility wrapper that returns (X, y) arrays.
 
     X: array(N, features=4) [temperature, humidity, rainfall, cloud_cover]
@@ -167,5 +184,5 @@ def create_data(samples=100, plot=True, save_csv=False, path='app/data/soil_mois
 
 if __name__ == '__main__':
     # Simple generator demo
-    df = generate_soil_moisture_dataset(n_rows=10000, seed=1, save_csv=True, path='app/data/soil_moisture_generated.csv', plot=True)
+    df = generate_soil_moisture_dataset(n_rows=10000, seed=1, save_csv=True, path='app/data/soil_moisture_synthetic.csv', plot=True)
     print(df.head(6).to_string(index=False))

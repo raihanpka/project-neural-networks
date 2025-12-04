@@ -12,7 +12,7 @@ from app.function.activations import ReLU, Softmax, Linear
 from app.function.regularization import BatchNormalization, Dropout
 from app.function.check_loss import CategoricalCrossentropy, MeanSquaredError
 from app.function.metrics import calculate_accuracy
-from app.data.dataset import create_data, generate_soil_moisture_dataset
+from app.data.generate_dataset import create_data, generate_soil_moisture_dataset
 
 # Normalisasi min-max untuk array numpy
 def _minmax_scale_np(arr, minv=None, maxv=None):
@@ -33,16 +33,20 @@ def discretize_target(y, n_bins=5):
 
 # Membuat urutan data time series yang di-flattenkan
 def create_sequences_flattened(df, features, target, seq_len):
+    """Create flattened sliding windows from the entire dataframe."""
+    # Sort by time if available
+    df_sorted = df.sort_values('time') if 'time' in df.columns else df
+    
+    feat_arr = df_sorted[features].values
+    target_arr = df_sorted[target].values
+    
     Xf = []
     Yf = []
-    for loc, group in df.groupby('location_id'):
-        group = group.sort_values('time') if 'time' in group else group
-        feat_arr = group[features].values
-        target_arr = group[target].values
-        for i in range(len(feat_arr) - seq_len):
-            win = feat_arr[i:i + seq_len]
-            Xf.append(win.flatten())
-            Yf.append(target_arr[i + seq_len])
+    for i in range(len(feat_arr) - seq_len):
+        win = feat_arr[i:i + seq_len]
+        Xf.append(win.flatten())
+        Yf.append(target_arr[i + seq_len])
+    
     Xf = np.array(Xf, dtype=float)
     Yf = np.array(Yf, dtype=float)
     return Xf, Yf
@@ -89,7 +93,7 @@ def train_and_eval_model(X, Y, is_regression=False, n_classes=5, epochs=100, bat
         return model, mae, None
 
 
-def main(dataset_path='app/data/soil_moisture.csv', use_timeseries=False, generate=False, n_locations=5, period_days=365, seq_length=15, n_classes=5, epochs=100, batch_size=64, lr=0.005, regression=False):
+def main(dataset_path='app/data/soil_moisture_level.csv', use_timeseries=False, generate=False, n_locations=5, period_days=365, seq_length=15, n_classes=5, epochs=100, batch_size=64, lr=0.005, regression=False):
     print('Starting pipeline...')
     if generate:
         print('Generating synthetic time series dataset...')
@@ -106,54 +110,25 @@ def main(dataset_path='app/data/soil_moisture.csv', use_timeseries=False, genera
 
     # Normalize columns
     df.columns = df.columns.str.strip().str.lower().str.replace(' ', '_')
+    # map ttime -> time if present
+    if 'ttime' in df.columns and 'time' not in df.columns:
+        df.rename(columns={'ttime': 'time'}, inplace=True)
     if 'time' in df.columns:
         df['time'] = pd.to_datetime(df['time'])
 
-    # For timeseries: generate location_id if not present
-    if 'latitude' in df.columns and 'longitude' in df.columns:
-        df['location_id'] = df.groupby(['latitude', 'longitude']).ngroup()
-    else:
-        df['location_id'] = 0
-
-    # Choose features depending on columns present
-    if 'temperature' in df.columns and 'soil_moisture' in df.columns:
-        feature_cols = [c for c in ['temperature', 'humidity', 'rainfall', 'cloud_cover'] if c in df.columns]
+    # Choose features for sensor dataset (if available) otherwise fallback to numeric columns
+    if 'pm1' in df.columns and 'soil_moisture' in df.columns:
+        feature_cols = [c for c in ['pm1', 'pm2', 'pm3', 'ammonia', 'luminosity', 'temperature', 'humidity', 'pressure'] if c in df.columns]
         target_col = 'soil_moisture'
-        if 'sm_tgt' not in df.columns:
-            df['sm_tgt'] = df['soil_moisture']
     else:
-        feature_cols = [c for c in ['latitude', 'longitude', 'clay_content', 'sand_content', 'silt_content', 'sm_aux'] if c in df.columns]
-        target_col = 'sm_tgt'
+        numeric_feats = [c for c in df.columns if pd.api.types.is_numeric_dtype(df[c])]
+        if len(numeric_feats) >= 2:
+            feature_cols = numeric_feats[:-1]
+            target_col = numeric_feats[-1]
+        else:
+            raise RuntimeError('No suitable feature/target columns found in dataset')
 
-    # Split june holdout if time present
-    if 'time' in df.columns:
-        june_df = df[df['time'].dt.month == 6]
-        train_df = df[df['time'].dt.month != 6]
-    else:
-        june_df = pd.DataFrame()
-        train_df = df
-
-    if len(train_df) == 0:
-        raise RuntimeError('No training data')
-
-    to_scale = feature_cols + [target_col]
-    train_scaled, minv, maxv = _minmax_scale_np(train_df[to_scale].values)
-    train_df_scaled = train_df.copy()
-    train_df_scaled[to_scale] = train_scaled
-    if len(june_df) > 0:
-        june_scaled = (june_df[to_scale].values - minv) / np.where((maxv - minv) == 0, 1, (maxv - minv))
-        june_df_scaled = june_df.copy()
-        june_df_scaled[to_scale] = june_scaled
-    else:
-        june_df_scaled = pd.DataFrame()
-
-    # Filter location counts
-    counts = train_df_scaled.groupby('location_id').size()
-    exclude = counts[counts < seq_length].index
-    train_df_scaled = train_df_scaled[~train_df_scaled['location_id'].isin(exclude)].reset_index(drop=True)
-    if len(june_df_scaled) > 0:
-        june_df_scaled = june_df_scaled[~june_df_scaled['location_id'].isin(exclude)].reset_index(drop=True)
-
+    # Create sequences from the entire dataset
     X_seq, Y_seq = create_sequences_flattened(train_df_scaled, feature_cols, target_col, seq_length)
     if X_seq.size == 0:
         raise RuntimeError('No sequences generated')
@@ -166,28 +141,12 @@ def main(dataset_path='app/data/soil_moisture.csv', use_timeseries=False, genera
         model, metric, _ = train_and_eval_model(X_seq, Y_seq, is_regression=True, n_classes=n_classes, epochs=epochs, batch_size=batch_size, lr=lr)
         print('Train MAE:', metric)
 
-    if len(june_df_scaled) > 0:
-        X_june, Y_june = create_sequences_flattened(june_df_scaled, feature_cols, target_col, seq_length)
-        if X_june.size != 0:
-            if not regression:
-                Y_june_classes = np.digitize(Y_june, edges[1:-1])
-                preds = model.predict_proba(X_june)
-                acc = calculate_accuracy(Y_june_classes, preds)
-                print('June holdout accuracy:', acc)
-            else:
-                preds = model.predict_proba(X_june).flatten()
-                tgt_min = minv[-1]
-                tgt_max = maxv[-1]
-                denom = tgt_max - tgt_min if (tgt_max - tgt_min) != 0 else 1.0
-                preds_original = preds * denom + tgt_min
-                y_original = Y_june.flatten() * denom + tgt_min
-                mae = np.mean(np.abs(preds_original - y_original))
-                print('June holdout MAE:', mae)
+    # No holdout evaluation required; completed training on full dataset
 
 
 if __name__ == '__main__':
     parser = argparse.ArgumentParser()
-    parser.add_argument('--dataset', default='app/data/soil_moisture.csv')
+    parser.add_argument('--dataset', default='app/data/soil_moisture_level.csv')
     parser.add_argument('--seq_length', type=int, default=15)
     parser.add_argument('--n_classes', type=int, default=5)
     parser.add_argument('--epochs', type=int, default=100)
