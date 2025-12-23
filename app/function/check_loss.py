@@ -27,11 +27,12 @@ class MeanSquaredError(BaseLoss):
         y_pred = np.array(y_pred)
         sample_size = len(y_pred)
 
-        # Convert integer labels to one-hot if necessary
-        if len(y_true.shape) == 1 and y_pred.ndim > 1:
+        # Convert integer labels to one-hot if necessary (only for multi-class classification)
+        if len(y_true.shape) == 1 and y_pred.ndim > 1 and y_pred.shape[1] > 1:
             n_outputs = y_pred.shape[1]
             y_true_ohe = np.zeros_like(y_pred)
-            y_true_ohe[range(sample_size), y_true] = 1
+            y_true_int = y_true.astype(int)
+            y_true_ohe[range(sample_size), y_true_int] = 1
         else:
             y_true_ohe = y_true
 
@@ -52,11 +53,12 @@ class MeanSquaredError(BaseLoss):
             # if predictions are 1D vectors
             y_pred = y_pred.reshape(-1, 1)
 
-        # Convert labels to one-hot if necessary
-        if len(y_true.shape) == 1 and y_pred.ndim > 1:
+        # Convert labels to one-hot if necessary (only for multi-class classification)
+        if len(y_true.shape) == 1 and y_pred.ndim > 1 and y_pred.shape[1] > 1:
             n_outputs = y_pred.shape[1]
             y_true_ohe = np.zeros_like(y_pred)
-            y_true_ohe[range(sample_size), y_true] = 1
+            y_true_int = y_true.astype(int)
+            y_true_ohe[range(sample_size), y_true_int] = 1
         else:
             y_true_ohe = y_true
 
@@ -115,11 +117,12 @@ class MeanAbsoluteError(BaseLoss):
         y_pred = np.array(y_pred)
         sample_size = len(y_pred)
 
-        # Convert integer labels to one-hot if necessary
-        if len(y_true.shape) == 1 and y_pred.ndim > 1:
+        # Convert integer labels to one-hot if necessary (only for multi-class classification)
+        if len(y_true.shape) == 1 and y_pred.ndim > 1 and y_pred.shape[1] > 1:
             n_outputs = y_pred.shape[1]
             y_true_ohe = np.zeros_like(y_pred)
-            y_true_ohe[range(sample_size), y_true] = 1
+            y_true_int = y_true.astype(int)  # Pastikan y_true adalah integer
+            y_true_ohe[range(sample_size), y_true_int] = 1
         else:
             y_true_ohe = y_true
 
@@ -137,11 +140,12 @@ class MeanAbsoluteError(BaseLoss):
         if len(y_pred.shape) == 1:
             y_pred = y_pred.reshape(-1, 1)
 
-        # Convert integer labels to one-hot if necessary
-        if len(y_true.shape) == 1 and y_pred.ndim > 1:
+        # Convert integer labels to one-hot if necessary (only for multi-class classification)
+        if len(y_true.shape) == 1 and y_pred.ndim > 1 and y_pred.shape[1] > 1:
             n_outputs = y_pred.shape[1]
             y_true_ohe = np.zeros_like(y_pred)
-            y_true_ohe[range(sample_size), y_true] = 1
+            y_true_int = y_true.astype(int)
+            y_true_ohe[range(sample_size), y_true_int] = 1
         else:
             y_true_ohe = y_true
 
@@ -189,7 +193,8 @@ class CategoricalCrossentropy(BaseLoss):
 
         # Menghitung correct_confidence berdasarkan y_pred_clipped dan y_true
         if len(y_true.shape) == 1:
-            correct_confidence = y_pred_clipped[range(sample), y_true]
+            y_true_int = y_true.astype(int)
+            correct_confidence = y_pred_clipped[range(sample), y_true_int]
         elif len(y_true.shape) == 2:
             correct_confidence = np.sum(y_pred_clipped * y_true, axis=1)
 
@@ -212,8 +217,9 @@ class CategoricalCrossentropy(BaseLoss):
 
         # Menghitung self.dinputs berdasarkan y_pred_clipped dan y_true
         if len(y_true.shape) == 1:
+            y_true_int = y_true.astype(int)
             self.dinputs = np.zeros_like(y_pred)
-            self.dinputs[range(sample_size), y_true] = -1 / y_pred_clipped[range(sample_size), y_true]
+            self.dinputs[range(sample_size), y_true_int] = -1 / y_pred_clipped[range(sample_size), y_true_int]
             self.dinputs = self.dinputs / sample_size 
         elif len(y_true.shape) == 2:
             self.dinputs = -y_true / y_pred_clipped

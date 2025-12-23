@@ -86,7 +86,7 @@ class NeuralNetwork:
                 patience_counter += 1
                 if patience_counter >= patience and epoch > 100:
                     if verbose:
-                        print(f"Pelepasan cepat pada epoch {epoch}")
+                        print(f"Early stopping pada epoch {epoch}")
                     break
             
             # Validasi dan logging

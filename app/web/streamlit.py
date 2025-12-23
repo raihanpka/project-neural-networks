@@ -14,7 +14,7 @@ from app.function.layer import Dense
 from app.function.activations import ReLU, Softmax, Sigmoid, Tanh, Linear
 from app.function.regularization import BatchNormalization, Dropout
 from app.function.check_loss import CategoricalCrossentropy, MeanSquaredError, MeanAbsoluteError
-from app.function.metrics import calculate_accuracy, calculate_r2_score, calculate_mae, calculate_rmse, calculate_mape
+from app.function.metrics import calculate_accuracy, calculate_r2_score, calculate_mae, calculate_rmse, calculate_mape, cross_validate
 
 st.set_page_config(page_title="Group 1 - Neural Network (PBL AI)", layout="wide", page_icon="📊")
 
@@ -307,61 +307,95 @@ with tab1:
         st.subheader("Statistik Deskriptif")
         st.dataframe(df.describe().T.style.format("{:.4f}"), width='stretch')
         
-        st.subheader("Visualisasi Data")
-        
-        col1 = st.columns(1)[0]
-        
-        with col1:
-            # Sensor-specific visualization: choose a sensor feature to compare with soil_moisture
-            if 'soil_moisture' in df.columns:
-                # Prefer pm1 if present, else luminosity, else temperature
-                if 'pm1' in df.columns:
-                    feature_x = 'pm1'
-                    xlabel = 'PM1'
-                elif 'luminosity' in df.columns:
-                    feature_x = 'luminosity'
-                    xlabel = 'Luminosity'
-                elif 'temperature' in df.columns:
-                    feature_x = 'temperature'
-                    xlabel = 'Temperature'
-                else:
-                    feature_x = None
-
-                if feature_x is not None and 'soil_moisture' in df.columns:
-                    fig, axes = plt.subplots(1, 3, figsize=(15, 4))
-
-                    # Plot 1: PM1 vs Soil Moisture
-                    s1 = axes[0].scatter(df[feature_x], df['soil_moisture'],
-                                        c=df['soil_moisture'], cmap='YlOrBr',
-                                        alpha=0.5, s=10)
-                    axes[0].set_xlabel(xlabel)
-                    axes[0].set_ylabel('Soil Moisture')
-                    axes[0].set_title(f'{xlabel} vs Soil Moisture')
-                    plt.colorbar(s1, ax=axes[0], label='Soil Moisture')
-                    axes[0].grid(True, alpha=0.3)
-
-                    # Plot 2: Luminosity vs Soil Moisture
-                    s2 = axes[1].scatter(df['luminosity'], df['soil_moisture'],
-                                        c=df['soil_moisture'], cmap='YlOrBr',
-                                        alpha=0.5, s=10)
-                    axes[1].set_xlabel('Luminosity')
-                    axes[1].set_ylabel('Soil Moisture')
-                    axes[1].set_title('Luminosity vs Soil Moisture')
-                    plt.colorbar(s2, ax=axes[1], label='Soil Moisture')
-                    axes[1].grid(True, alpha=0.3)
-
-                    # Plot 3: Temperature vs Soil Moisture
-                    s3 = axes[2].scatter(df['temperature'], df['soil_moisture'],
-                                        c=df['soil_moisture'], cmap='coolwarm',
-                                        alpha=0.5, s=10)
-                    axes[2].set_xlabel('Temperature')
-                    axes[2].set_ylabel('Soil Moisture')
-                    axes[2].set_title('Temperature vs Soil Moisture')
-                    plt.colorbar(s3, ax=axes[2], label='Soil Moisture')
-                    axes[2].grid(True, alpha=0.3)
-
-                    plt.tight_layout()
-                    st.pyplot(fig)
+        # Analisis Bivariat
+        feature_cols = st.session_state.get('feature_cols', [])
+        if 'soil_moisture' in df.columns and len(feature_cols) > 0:
+            st.subheader("Exploratory Data Analysis (EDA)")
+            
+            # Additional scatter plots untuk semua fitur vs soil moisture
+            st.markdown("**Semua Fitur vs Soil Moisture**")
+            available_features = [f for f in feature_cols if f in df.columns and f != 'soil_moisture']
+            
+            if len(available_features) >= 4:
+                fig, axes = plt.subplots(2, 4, figsize=(20, 10))
+                axes = axes.flatten()
+                
+                for idx, feature in enumerate(available_features[:8]):
+                    if idx < len(axes):
+                        scatter = axes[idx].scatter(df[feature], df['soil_moisture'],
+                                                   c=df['soil_moisture'], cmap='viridis',
+                                                   alpha=0.5, s=10, edgecolors='none')
+                        axes[idx].set_xlabel(feature.replace('_', ' ').title(), fontsize=10)
+                        axes[idx].set_ylabel('Soil Moisture', fontsize=10)
+                        axes[idx].set_title(f'{feature.replace("_", " ").title()} vs Soil Moisture', 
+                                          fontsize=11, fontweight='bold')
+                        axes[idx].grid(True, alpha=0.3)
+                        
+                        # Add correlation coefficient
+                        corr = df[[feature, 'soil_moisture']].corr().iloc[0, 1]
+                        axes[idx].text(0.05, 0.95, f'Corr: {corr:.3f}', transform=axes[idx].transAxes,
+                                     fontsize=9, verticalalignment='top',
+                                     bbox=dict(boxstyle='round', facecolor='white', alpha=0.7))
+                
+                # Hide unused subplots
+                for idx in range(len(available_features), len(axes)):
+                    axes[idx].set_visible(False)
+                
+                plt.tight_layout()
+                st.pyplot(fig)
+            
+            # Correlation Heatmap
+            st.markdown("**Correlation Matrix**")
+            corr_cols = [col for col in feature_cols if col in df.columns] + ['soil_moisture']
+            corr_matrix = df[corr_cols].corr()
+            
+            fig, ax = plt.subplots(figsize=(10, 8))
+            im = ax.imshow(corr_matrix, cmap='coolwarm', aspect='auto', vmin=-1, vmax=1)
+            
+            # Set ticks
+            ax.set_xticks(np.arange(len(corr_cols)))
+            ax.set_yticks(np.arange(len(corr_cols)))
+            ax.set_xticklabels(corr_cols, rotation=45, ha='right')
+            ax.set_yticklabels(corr_cols)
+            
+            # Add colorbar
+            cbar = plt.colorbar(im, ax=ax)
+            cbar.set_label('Correlation', rotation=270, labelpad=20)
+            
+            # Add correlation values as text
+            for i in range(len(corr_cols)):
+                for j in range(len(corr_cols)):
+                    text = ax.text(j, i, f'{corr_matrix.iloc[i, j]:.2f}',
+                                 ha="center", va="center", color="black" if abs(corr_matrix.iloc[i, j]) < 0.5 else "white",
+                                 fontsize=9)
+            
+            ax.set_title('Feature Correlation Heatmap', fontsize=13, fontweight='bold', pad=20)
+            plt.tight_layout()
+            st.pyplot(fig)
+            
+            # Box plots untuk perbandingan distribusi
+            st.markdown("**Distribusi Fitur (Box Plots)**")
+            fig, axes = plt.subplots(2, 4, figsize=(16, 8))
+            axes = axes.flatten()
+            
+            all_plot_cols = [col for col in feature_cols if col in df.columns] + ['soil_moisture']
+            for idx, col in enumerate(all_plot_cols[:8]):
+                if idx < len(axes):
+                    axes[idx].boxplot(df[col].dropna(), vert=True, patch_artist=True,
+                                    boxprops=dict(facecolor='lightblue', alpha=0.7),
+                                    medianprops=dict(color='red', linewidth=2),
+                                    whiskerprops=dict(color='blue'),
+                                    capprops=dict(color='blue'))
+                    axes[idx].set_ylabel('Value', fontsize=10)
+                    axes[idx].set_title(col, fontsize=11, fontweight='bold')
+                    axes[idx].grid(True, alpha=0.3, axis='y')
+            
+            # Hide unused subplots
+            for idx in range(len(all_plot_cols), len(axes)):
+                axes[idx].set_visible(False)
+            
+            plt.tight_layout()
+            st.pyplot(fig)
         
         feature_cols = st.session_state.get('feature_cols', [])
         if len(feature_cols) > 0:
@@ -540,6 +574,16 @@ with tab3:
     
     st.markdown("---")
     
+    # Cross Validation Option (sebelum tombol training)
+    use_cross_validation = st.checkbox("Gunakan K-Fold Cross Validation", value=False,
+                                      help="Evaluasi model dengan K-Fold CV untuk hasil lebih robust")
+    if use_cross_validation:
+        n_folds = st.slider("Jumlah Folds", min_value=3, max_value=10, value=5)
+        st.session_state['use_cross_validation'] = True
+        st.session_state['n_folds'] = n_folds
+    else:
+        st.session_state['use_cross_validation'] = False
+    
     if st.button("Mulai Training", type="primary"):
         if 'df' not in st.session_state:
             st.error("Silakan muat dataset terlebih dahulu!")
@@ -606,6 +650,10 @@ with tab3:
                 output_neurons = len(np.unique(Y))
             
             st.info(f"Training: {len(X)} sampel, {input_size} fitur, {'1 output' if regression_mode else f'{output_neurons} kelas'}")
+            
+            # Ambil setting CV dari session state
+            use_cross_validation = st.session_state.get('use_cross_validation', False)
+            n_folds = st.session_state.get('n_folds', 5)
 
             # Train/Test Split (70/30)
             train_ratio = 0.7
@@ -768,6 +816,7 @@ with tab3:
                         acc_placeholder.line_chart(acc_df, color='#27AE60')
             
             progress_bar.progress(1.0)
+            status_text.success("Training selesai! ✅")
             
             # Final evaluation pada TEST data (bukan training data!)
             final_output = model.forward(X_test, training=False)
@@ -807,6 +856,63 @@ with tab3:
                 st.success(f"Training selesai!")
             else:
                 st.success(f"Training selesai! Final Accuracy: {final_accuracy:.4f}")
+            
+            # Run Cross Validation if enabled
+            if use_cross_validation:
+                st.markdown("---")
+                st.subheader("K-Fold Cross Validation")
+                cv_status = st.empty()
+                cv_status.info(f"Menjalankan {n_folds}-Fold Cross Validation...")
+                
+                def build_model():
+                    m = NeuralNetwork()
+                    prev_neurons = input_size
+                    for i, layer_cfg in enumerate(layer_config):
+                        m.add(Dense(prev_neurons, layer_cfg['neurons'], learning_rate=learning_rate))
+                        if layer_cfg['batchnorm']:
+                            m.add(BatchNormalization())
+                        m.add(get_activation_class(layer_cfg['activation'])())
+                        if layer_cfg['dropout'] > 0:
+                            m.add(Dropout(layer_cfg['dropout']))
+                        prev_neurons = layer_cfg['neurons']
+                    m.add(Dense(prev_neurons, output_neurons, learning_rate=learning_rate))
+                    if regression_mode:
+                        m.add(get_activation_class('Sigmoid')())
+                    else:
+                        m.add(get_activation_class(st.session_state['output_activation'])())
+                    LossClass = get_loss_class(loss_function)
+                    if loss_function == 'Categorical Crossentropy':
+                        m.set_loss(LossClass(regularization_l2=regularization_l2))
+                    else:
+                        m.set_loss(LossClass())
+                    return m
+                
+                cv_results = cross_validate(
+                    model_builder=build_model,
+                    X=X,
+                    y=Y,
+                    n_splits=n_folds,
+                    epochs=epochs,
+                    batch_size=batch_size,
+                    regression=regression_mode,
+                    shuffle=True,
+                    verbose=False
+                )
+                
+                cv_status.success("✅ Cross Validation selesai!")
+                
+                # Tampilkan hasil CV
+                col1, col2 = st.columns(2)
+                if regression_mode:
+                    with col1:
+                        st.metric("CV R² Score", f"{cv_results['mean_r2']:.4f} ± {cv_results['std_r2']:.4f}")
+                    with col2:
+                        st.metric("CV MAE", f"{cv_results['mean_mae']:.2f} ± {cv_results['std_mae']:.2f}")
+                else:
+                    with col1:
+                        st.metric("CV Accuracy", f"{cv_results['mean_score']:.4f} ± {cv_results['std_score']:.4f}")
+                
+                st.session_state['cv_results'] = cv_results
 
 with tab4:
     st.header("Hasil Training dan Prediksi")
@@ -924,17 +1030,48 @@ with tab4:
         col1 = st.columns(1)[0]
         
         with col1:
-            fig, ax = plt.subplots(figsize=(8, 6))
             if regression_mode:
-                # Plot predicted vs true scatter
-                ax.scatter(range(len(Y_analysis)), Y_analysis, label='True', alpha=0.5, s=10)
-                ax.scatter(range(len(preds_orig)), preds_orig, label='Predicted', alpha=0.5, s=10)
-                ax.set_xlabel('Sample Index')
-                ax.set_ylabel('Soil Moisture')
-                ax.set_title('True vs Predicted (Test Set)')
-                ax.legend()
-                ax.grid(True, alpha=0.3)
+                # Untuk regression: 2 plots (correlation plot dan time series)
+                fig, axes = plt.subplots(1, 2, figsize=(14, 5))
+                
+                # Plot 1: Correlation plot (True vs Predicted)
+                ax1 = axes[0]
+                ax1.scatter(Y_analysis, preds_orig, alpha=0.5, s=15, c='steelblue', edgecolors='white', linewidth=0.5)
+                
+                # Perfect prediction line (y=x)
+                min_val = min(Y_analysis.min(), preds_orig.min())
+                max_val = max(Y_analysis.max(), preds_orig.max())
+                ax1.plot([min_val, max_val], [min_val, max_val], 'r--', linewidth=2, label='Perfect Prediction')
+                
+                # Regression line (fitted)
+                z = np.polyfit(Y_analysis, preds_orig, 1)
+                p = np.poly1d(z)
+                ax1.plot(Y_analysis, p(Y_analysis), 'g-', linewidth=2, alpha=0.7, label=f'Fit: y={z[0]:.2f}x+{z[1]:.2f}')
+                
+                ax1.set_xlabel('True Value', fontsize=11)
+                ax1.set_ylabel('Predicted Value', fontsize=11)
+                ax1.set_title('Correlation: True vs Predicted', fontsize=13, fontweight='bold')
+                ax1.legend()
+                ax1.grid(True, alpha=0.3)
+                
+                # Calculate and display R² on plot
+                r2 = st.session_state.get('final_r2', 0)
+                ax1.text(0.05, 0.95, f'R² = {r2:.4f}', transform=ax1.transAxes, 
+                        fontsize=11, verticalalignment='top', bbox=dict(boxstyle='round', facecolor='wheat', alpha=0.5))
+                
+                # Plot 2: Time series plot
+                ax2 = axes[1]
+                ax2.scatter(range(len(Y_analysis)), Y_analysis, label='True', alpha=0.5, s=10, c='orange')
+                ax2.scatter(range(len(preds_orig)), preds_orig, label='Predicted', alpha=0.5, s=10, c='blue')
+                ax2.set_xlabel('Sample Index', fontsize=11)
+                ax2.set_ylabel('Soil Moisture', fontsize=11)
+                ax2.set_title('Time Series: True vs Predicted', fontsize=13, fontweight='bold')
+                ax2.legend()
+                ax2.grid(True, alpha=0.3)
+                
+                plt.tight_layout()
             else:
+                fig, ax = plt.subplots(figsize=(8, 6))
                 unique_classes = np.unique(Y_analysis)
                 pred_counts = [np.sum(predictions == c) for c in unique_classes]
                 true_counts = [np.sum(Y_analysis == c) for c in unique_classes]
@@ -988,6 +1125,17 @@ with tab4:
                     st.metric("R² Score", f"{r2:.4f}", help="Coefficient of Determination (0-1, lebih tinggi lebih baik)")
                 with col4:
                     st.metric("Test Samples", f"{len(y_true):,}")
+                
+                # Tampilkan hasil CV jika ada
+                if 'cv_results' in st.session_state:
+                    st.markdown("---")
+                    st.markdown("### Cross Validation")
+                    cv = st.session_state['cv_results']
+                    col1, col2 = st.columns(2)
+                    with col1:
+                        st.metric("CV R² Score", f"{cv['mean_r2']:.4f} ± {cv['std_r2']:.4f}")
+                    with col2:
+                        st.metric("CV MAE", f"{cv['mean_mae']:.2f} ± {cv['std_mae']:.2f}")
                 
                 # Sample preview (ambil 300 sampel random untuk ditampilkan)
                 sample_size = min(300, len(y_true))
